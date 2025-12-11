@@ -1,0 +1,878 @@
+Lab 104: Docker for Performance - Running Benchmarking Tools in Docker
+Lab Objectives
+By the end of this lab, you will be able to:
+
+Install and configure performance benchmarking tools inside Docker containers
+Deploy and test containerized web applications using load testing tools
+Capture, analyze, and interpret performance metrics including response time and throughput
+Execute distributed load tests using multiple Docker containers
+Integrate automated performance testing into CI/CD pipelines
+Understand Docker networking and resource management for performance testing scenarios
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Docker concepts (containers, images, Dockerfile)
+Familiarity with command-line interface operations
+Basic knowledge of web applications and HTTP protocols
+Understanding of performance metrics concepts
+No prior experience with benchmarking tools required - we'll cover everything step by step
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with Docker already installed. Simply click Start Lab to access your environment - no need to build your own VM or install Docker manually.
+
+Your lab environment includes:
+
+Ubuntu 22.04 LTS with Docker Engine installed
+Docker Compose pre-installed
+Network access for pulling Docker images
+Sufficient resources for running multiple containers
+Task 1: Install Benchmarking Tools in Docker Containers
+Subtask 1.1: Create Apache Bench (ab) Container
+First, let's create a custom Docker image with Apache Bench installed.
+
+Create a new directory for our benchmarking project:
+mkdir docker-performance-lab
+cd docker-performance-lab
+Create a Dockerfile for Apache Bench:
+cat > Dockerfile.ab << 'EOF'
+FROM ubuntu:22.04
+
+# Update package list and install Apache Bench
+RUN apt-get update && \
+    apt-get install -y apache2-utils curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /benchmarks
+
+# Default command
+CMD ["ab", "-V"]
+EOF
+Build the Apache Bench Docker image:
+docker build -f Dockerfile.ab -t apache-bench:latest .
+Verify the installation:
+docker run --rm apache-bench:latest ab -V
+Subtask 1.2: Create Siege Container
+Now let's create a container with Siege, another popular benchmarking tool.
+
+Create a Dockerfile for Siege:
+cat > Dockerfile.siege << 'EOF'
+FROM ubuntu:22.04
+
+# Update and install Siege
+RUN apt-get update && \
+    apt-get install -y siege curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create siege configuration directory
+RUN mkdir -p /root/.siege
+
+# Set working directory
+WORKDIR /benchmarks
+
+# Default command
+CMD ["siege", "--version"]
+EOF
+Build the Siege Docker image:
+docker build -f Dockerfile.siege -t siege-bench:latest .
+Verify the Siege installation:
+docker run --rm siege-bench:latest siege --version
+Subtask 1.3: Create a Test Web Application
+Let's create a simple web application to test against.
+
+Create a simple Node.js web application:
+cat > app.js << 'EOF'
+const express = require('express');
+const app = express();
+const port = 3000;
+
+// Simulate different response times
+const simulateDelay = (min, max) => {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+};
+
+// Root endpoint
+app.get('/', (req, res) => {
+    setTimeout(() => {
+        res.json({
+            message: 'Hello from Docker Performance Lab!',
+            timestamp: new Date().toISOString(),
+            server: 'node-app'
+        });
+    }, simulateDelay(10, 50));
+});
+
+// CPU intensive endpoint
+app.get('/cpu-intensive', (req, res) => {
+    const start = Date.now();
+    let result = 0;
+    
+    // Simulate CPU work
+    for (let i = 0; i < 1000000; i++) {
+        result += Math.sqrt(i);
+    }
+    
+    setTimeout(() => {
+        res.json({
+            message: 'CPU intensive task completed',
+            duration: Date.now() - start,
+            result: result,
+            timestamp: new Date().toISOString()
+        });
+    }, simulateDelay(100, 200));
+});
+
+// Memory endpoint
+app.get('/memory', (req, res) => {
+    const memoryUsage = process.memoryUsage();
+    res.json({
+        message: 'Memory usage information',
+        memory: memoryUsage,
+        timestamp: new Date().toISOString()
+    });
+});
+
+app.listen(port, '0.0.0.0', () => {
+    console.log(`Test app listening at http://0.0.0.0:${port}`);
+});
+EOF
+Create package.json for the Node.js app:
+cat > package.json << 'EOF'
+{
+  "name": "docker-performance-test-app",
+  "version": "1.0.0",
+  "description": "Simple web app for performance testing",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
+EOF
+Create Dockerfile for the web application:
+cat > Dockerfile.webapp << 'EOF'
+FROM node:18-alpine
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy application code
+COPY app.js .
+
+# Expose port
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000/ || exit 1
+
+# Start the application
+CMD ["npm", "start"]
+EOF
+Build the web application image:
+docker build -f Dockerfile.webapp -t test-webapp:latest .
+Task 2: Run Load Tests Against Containerized Web App
+Subtask 2.1: Deploy the Web Application
+Create a Docker network for our testing environment:
+docker network create performance-test-network
+Run the web application container:
+docker run -d \
+    --name test-webapp \
+    --network performance-test-network \
+    -p 3000:3000 \
+    test-webapp:latest
+Verify the application is running:
+# Wait a few seconds for the app to start
+sleep 5
+
+# Test the application
+curl http://localhost:3000/
+curl http://localhost:3000/cpu-intensive
+curl http://localhost:3000/memory
+Subtask 2.2: Run Apache Bench Load Tests
+Run a basic load test with Apache Bench:
+docker run --rm \
+    --network performance-test-network \
+    apache-bench:latest \
+    ab -n 1000 -c 10 http://test-webapp:3000/
+Command Explanation:
+
+-n 1000: Total number of requests to perform
+-c 10: Number of concurrent requests
+http://test-webapp:3000/: Target URL (using container name for internal networking)
+Run a more intensive test on the CPU-intensive endpoint:
+docker run --rm \
+    --network performance-test-network \
+    apache-bench:latest \
+    ab -n 500 -c 5 -t 30 http://test-webapp:3000/cpu-intensive
+Command Explanation:
+
+-t 30: Maximum time to spend on benchmarking (30 seconds)
+Generate detailed output with timing information:
+docker run --rm \
+    --network performance-test-network \
+    apache-bench:latest \
+    ab -n 1000 -c 20 -g ab-results.tsv http://test-webapp:3000/
+Subtask 2.3: Run Siege Load Tests
+Run a basic Siege test:
+docker run --rm \
+    --network performance-test-network \
+    siege-bench:latest \
+    siege -c 10 -t 30s http://test-webapp:3000/
+Command Explanation:
+
+-c 10: Number of concurrent users
+-t 30s: Duration of the test (30 seconds)
+Run Siege with multiple URLs:
+# Create a URL list file
+cat > urls.txt << 'EOF'
+http://test-webapp:3000/
+http://test-webapp:3000/cpu-intensive
+http://test-webapp:3000/memory
+EOF
+
+# Run Siege with multiple endpoints
+docker run --rm \
+    --network performance-test-network \
+    -v $(pwd)/urls.txt:/benchmarks/urls.txt \
+    siege-bench:latest \
+    siege -c 5 -t 20s -f /benchmarks/urls.txt
+Run Siege with detailed logging:
+docker run --rm \
+    --network performance-test-network \
+    -v $(pwd):/benchmarks/output \
+    siege-bench:latest \
+    siege -c 15 -t 45s --log=/benchmarks/output/siege.log http://test-webapp:3000/
+Task 3: Capture and Analyze Performance Metrics
+Subtask 3.1: Create Performance Monitoring Scripts
+Create a comprehensive benchmarking script:
+cat > benchmark.sh << 'EOF'
+#!/bin/bash
+
+# Performance Benchmarking Script
+echo "=== Docker Performance Benchmarking Lab ==="
+echo "Starting comprehensive performance tests..."
+echo
+
+# Test configuration
+WEBAPP_URL="http://test-webapp:3000"
+NETWORK="performance-test-network"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+RESULTS_DIR="results_${TIMESTAMP}"
+
+# Create results directory
+mkdir -p ${RESULTS_DIR}
+
+echo "Results will be saved to: ${RESULTS_DIR}"
+echo
+
+# Test 1: Apache Bench - Basic Load Test
+echo "=== Test 1: Apache Bench Basic Load Test ==="
+docker run --rm \
+    --network ${NETWORK} \
+    apache-bench:latest \
+    ab -n 1000 -c 10 ${WEBAPP_URL}/ > ${RESULTS_DIR}/ab_basic.txt
+
+echo "Basic load test completed. Results saved to ${RESULTS_DIR}/ab_basic.txt"
+echo
+
+# Test 2: Apache Bench - High Concurrency Test
+echo "=== Test 2: Apache Bench High Concurrency Test ==="
+docker run --rm \
+    --network ${NETWORK} \
+    apache-bench:latest \
+    ab -n 2000 -c 50 ${WEBAPP_URL}/ > ${RESULTS_DIR}/ab_high_concurrency.txt
+
+echo "High concurrency test completed. Results saved to ${RESULTS_DIR}/ab_high_concurrency.txt"
+echo
+
+# Test 3: Apache Bench - CPU Intensive Endpoint
+echo "=== Test 3: Apache Bench CPU Intensive Test ==="
+docker run --rm \
+    --network ${NETWORK} \
+    apache-bench:latest \
+    ab -n 200 -c 10 ${WEBAPP_URL}/cpu-intensive > ${RESULTS_DIR}/ab_cpu_intensive.txt
+
+echo "CPU intensive test completed. Results saved to ${RESULTS_DIR}/ab_cpu_intensive.txt"
+echo
+
+# Test 4: Siege - Sustained Load Test
+echo "=== Test 4: Siege Sustained Load Test ==="
+docker run --rm \
+    --network ${NETWORK} \
+    siege-bench:latest \
+    siege -c 20 -t 60s ${WEBAPP_URL}/ > ${RESULTS_DIR}/siege_sustained.txt
+
+echo "Sustained load test completed. Results saved to ${RESULTS_DIR}/siege_sustained.txt"
+echo
+
+# Test 5: Container Resource Monitoring
+echo "=== Test 5: Container Resource Monitoring ==="
+echo "Monitoring container resources during load test..."
+
+# Start monitoring in background
+docker stats test-webapp --no-stream > ${RESULTS_DIR}/container_stats.txt &
+STATS_PID=$!
+
+# Run a load test while monitoring
+docker run --rm \
+    --network ${NETWORK} \
+    apache-bench:latest \
+    ab -n 1500 -c 25 ${WEBAPP_URL}/ > ${RESULTS_DIR}/ab_with_monitoring.txt
+
+# Stop monitoring
+kill $STATS_PID 2>/dev/null
+
+echo "Resource monitoring completed. Results saved to ${RESULTS_DIR}/container_stats.txt"
+echo
+
+echo "=== All tests completed! ==="
+echo "Check the ${RESULTS_DIR} directory for detailed results."
+EOF
+
+chmod +x benchmark.sh
+Run the comprehensive benchmark:
+./benchmark.sh
+Subtask 3.2: Analyze Performance Results
+Create a results analysis script:
+cat > analyze_results.sh << 'EOF'
+#!/bin/bash
+
+# Find the most recent results directory
+RESULTS_DIR=$(ls -td results_* | head -n1)
+
+if [ -z "$RESULTS_DIR" ]; then
+    echo "No results directory found. Please run benchmark.sh first."
+    exit 1
+fi
+
+echo "=== Performance Analysis Report ==="
+echo "Analyzing results from: $RESULTS_DIR"
+echo "Generated on: $(date)"
+echo
+
+# Function to extract key metrics from Apache Bench results
+analyze_ab_results() {
+    local file=$1
+    local test_name=$2
+    
+    echo "--- $test_name ---"
+    
+    if [ -f "$file" ]; then
+        echo "Requests per second: $(grep 'Requests per second' $file | awk '{print $4}')"
+        echo "Time per request (mean): $(grep 'Time per request' $file | head -n1 | awk '{print $4}')"
+        echo "Transfer rate: $(grep 'Transfer rate' $file | awk '{print $3}')"
+        echo "Failed requests: $(grep 'Failed requests' $file | awk '{print $3}')"
+        echo "50% response time: $(grep '50%' $file | awk '{print $2}')"
+        echo "95% response time: $(grep '95%' $file | awk '{print $2}')"
+        echo "99% response time: $(grep '99%' $file | awk '{print $2}')"
+    else
+        echo "Results file not found: $file"
+    fi
+    echo
+}
+
+# Function to analyze Siege results
+analyze_siege_results() {
+    local file=$1
+    local test_name=$2
+    
+    echo "--- $test_name ---"
+    
+    if [ -f "$file" ]; then
+        echo "Transactions: $(grep 'Transactions:' $file | awk '{print $2}')"
+        echo "Availability: $(grep 'Availability:' $file | awk '{print $2}')"
+        echo "Elapsed time: $(grep 'Elapsed time:' $file | awk '{print $3}')"
+        echo "Data transferred: $(grep 'Data transferred:' $file | awk '{print $3}')"
+        echo "Response time: $(grep 'Response time:' $file | awk '{print $3}')"
+        echo "Transaction rate: $(grep 'Transaction rate:' $file | awk '{print $3}')"
+        echo "Throughput: $(grep 'Throughput:' $file | awk '{print $2}')"
+    else
+        echo "Results file not found: $file"
+    fi
+    echo
+}
+
+# Analyze all test results
+analyze_ab_results "$RESULTS_DIR/ab_basic.txt" "Apache Bench - Basic Load Test"
+analyze_ab_results "$RESULTS_DIR/ab_high_concurrency.txt" "Apache Bench - High Concurrency Test"
+analyze_ab_results "$RESULTS_DIR/ab_cpu_intensive.txt" "Apache Bench - CPU Intensive Test"
+analyze_siege_results "$RESULTS_DIR/siege_sustained.txt" "Siege - Sustained Load Test"
+
+# Container resource analysis
+echo "--- Container Resource Usage ---"
+if [ -f "$RESULTS_DIR/container_stats.txt" ]; then
+    echo "Container resource usage during load test:"
+    cat "$RESULTS_DIR/container_stats.txt"
+else
+    echo "Container stats file not found"
+fi
+echo
+
+echo "=== Summary and Recommendations ==="
+echo "1. Compare response times across different test scenarios"
+echo "2. Monitor failed requests - should be 0 for a healthy application"
+echo "3. Check 95th and 99th percentile response times for user experience"
+echo "4. Monitor container resource usage to identify bottlenecks"
+echo "5. Use these metrics to establish performance baselines"
+echo
+EOF
+
+chmod +x analyze_results.sh
+Run the analysis:
+./analyze_results.sh
+Task 4: Run Distributed Load Tests Using Multiple Docker Containers
+Subtask 4.1: Create Distributed Testing Setup
+Create a Docker Compose file for distributed testing:
+cat > docker-compose.distributed.yml << 'EOF'
+version: '3.8'
+
+services:
+  # Web application
+  webapp:
+    build:
+      context: .
+      dockerfile: Dockerfile.webapp
+    ports:
+      - "3000:3000"
+    networks:
+      - perf-test
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # Load balancer (nginx)
+  loadbalancer:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - webapp
+      - webapp-replica1
+      - webapp-replica2
+    networks:
+      - perf-test
+
+  # Web application replicas
+  webapp-replica1:
+    build:
+      context: .
+      dockerfile: Dockerfile.webapp
+    networks:
+      - perf-test
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  webapp-replica2:
+    build:
+      context: .
+      dockerfile: Dockerfile.webapp
+    networks:
+      - perf-test
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # Distributed load generators
+  loadgen1:
+    build:
+      context: .
+      dockerfile: Dockerfile.ab
+    networks:
+      - perf-test
+    volumes:
+      - ./distributed-results:/results
+    command: sleep infinity
+
+  loadgen2:
+    build:
+      context: .
+      dockerfile: Dockerfile.siege
+    networks:
+      - perf-test
+    volumes:
+      - ./distributed-results:/results
+    command: sleep infinity
+
+  loadgen3:
+    build:
+      context: .
+      dockerfile: Dockerfile.ab
+    networks:
+      - perf-test
+    volumes:
+      - ./distributed-results:/results
+    command: sleep infinity
+
+networks:
+  perf-test:
+    driver: bridge
+
+volumes:
+  distributed-results:
+EOF
+Create nginx configuration for load balancing:
+cat > nginx.conf << 'EOF'
+events {
+    worker_connections 1024;
+}
+
+http {
+    upstream webapp_backend {
+        server webapp:3000;
+        server webapp-replica1:3000;
+        server webapp-replica2:3000;
+    }
+
+    server {
+        listen 80;
+        
+        location / {
+            proxy_pass http://webapp_backend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+}
+EOF
+Create results directory:
+mkdir -p distributed-results
+Subtask 4.2: Deploy Distributed Testing Environment
+Start the distributed testing environment:
+docker-compose -f docker-compose.distributed.yml up -d
+Wait for all services to be ready:
+# Wait for services to start
+sleep 15
+
+# Check service status
+docker-compose -f docker-compose.distributed.yml ps
+Verify the load balancer is working:
+# Test direct access to webapp
+curl http://localhost:3000/
+
+# Test access through load balancer
+curl http://localhost:8080/
+curl http://localhost:8080/
+curl http://localhost:8080/
+Subtask 4.3: Execute Distributed Load Tests
+Create a distributed testing script:
+cat > distributed_test.sh << 'EOF'
+#!/bin/bash
+
+echo "=== Distributed Load Testing ==="
+echo "Starting coordinated load tests from multiple containers..."
+echo
+
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+RESULTS_DIR="distributed-results"
+
+# Test 1: Simultaneous load from multiple Apache Bench containers
+echo "=== Test 1: Simultaneous Apache Bench Tests ==="
+
+# Start load generator 1
+docker-compose -f docker-compose.distributed.yml exec -d loadgen1 \
+    ab -n 2000 -c 20 http://loadbalancer/ > ${RESULTS_DIR}/loadgen1_${TIMESTAMP}.txt &
+
+# Start load generator 3 (also Apache Bench)
+docker-compose -f docker-compose.distributed.yml exec -d loadgen3 \
+    ab -n 2000 -c 20 http://loadbalancer/ > ${RESULTS_DIR}/loadgen3_${TIMESTAMP}.txt &
+
+# Start Siege from load generator 2
+docker-compose -f docker-compose.distributed.yml exec -d loadgen2 \
+    siege -c 15 -t 60s http://loadbalancer/ > ${RESULTS_DIR}/siege_${TIMESTAMP}.txt &
+
+echo "All load generators started. Tests will run for approximately 60 seconds..."
+
+# Wait for tests to complete
+sleep 70
+
+echo "Distributed load tests completed!"
+echo
+
+# Test 2: Sequential high-intensity tests
+echo "=== Test 2: Sequential High-Intensity Tests ==="
+
+# High concurrency test
+docker-compose -f docker-compose.distributed.yml exec loadgen1 \
+    ab -n 5000 -c 100 http://loadbalancer/ > ${RESULTS_DIR}/high_concurrency_${TIMESTAMP}.txt
+
+echo "High concurrency test completed!"
+
+# CPU intensive endpoint test
+docker-compose -f docker-compose.distributed.yml exec loadgen2 \
+    siege -c 10 -t 30s http://loadbalancer/cpu-intensive > ${RESULTS_DIR}/cpu_intensive_distributed_${TIMESTAMP}.txt
+
+echo "CPU intensive distributed test completed!"
+echo
+
+echo "=== All distributed tests completed! ==="
+echo "Results saved in: ${RESULTS_DIR}/"
+EOF
+
+chmod +x distributed_test.sh
+Run the distributed tests:
+./distributed_test.sh
+Monitor container resources during testing:
+# In a separate terminal, monitor all containers
+docker stats --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}"
+Subtask 4.4: Analyze Distributed Test Results
+Create a distributed results analyzer:
+cat > analyze_distributed.sh << 'EOF'
+#!/bin/bash
+
+RESULTS_DIR="distributed-results"
+
+echo "=== Distributed Load Testing Analysis ==="
+echo "Analyzing results from: $RESULTS_DIR"
+echo
+
+# Check if results directory exists
+if [ ! -d "$RESULTS_DIR" ]; then
+    echo "Results directory not found. Please run distributed tests first."
+    exit 1
+fi
+
+echo "Available result files:"
+ls -la $RESULTS_DIR/
+echo
+
+# Function to get container logs for analysis
+echo "=== Container Performance During Tests ==="
+echo "Web Application Containers:"
+docker-compose -f docker-compose.distributed.yml logs --tail=20 webapp
+echo
+docker-compose -f docker-compose.distributed.yml logs --tail=20 webapp-replica1
+echo
+docker-compose -f docker-compose.distributed.yml logs --tail=20 webapp-replica2
+echo
+
+echo "=== Load Balancer Logs ==="
+docker-compose -f docker-compose.distributed.yml logs --tail=20 loadbalancer
+echo
+
+echo "=== Summary ==="
+echo "1. Multiple load generators successfully coordinated attacks"
+echo "2. Load balancer distributed requests across multiple app instances"
+echo "3. Container resource usage monitored during high-load scenarios"
+echo "4. This setup simulates real-world distributed load testing"
+echo
+EOF
+
+chmod +x analyze_distributed.sh
+Run the distributed analysis:
+./analyze_distributed.sh
+Task 5: Integrate Performance Tests into CI Pipeline
+Subtask 5.1: Create CI Pipeline Configuration
+Create a GitHub Actions workflow file:
+mkdir -p .github/workflows
+
+cat > .github/workflows/performance-ci.yml << 'EOF'
+name: Performance Testing CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Run performance tests daily at 2 AM UTC
+    - cron: '0 2 * * *'
+
+jobs:
+  performance-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Build test application
+      run: |
+        docker build -f Dockerfile.webapp -t test-webapp:ci .
+        docker build -f Dockerfile.ab -t apache-bench:ci .
+        docker build -f Dockerfile.siege -t siege-bench:ci .
+    
+    - name: Create Docker network
+      run: docker network create ci-perf-network
+    
+    - name: Start test application
+      run: |
+        docker run -d \
+          --name test-webapp-ci \
+          --network ci-perf-network \
+          -p 3000:3000 \
+          test-webapp:ci
+        
+        # Wait for application to be ready
+        sleep 10
+        
+        # Health check
+        curl --retry 5 --retry-delay 2 http://localhost:3000/
+    
+    - name: Run performance tests
+      run: |
+        # Create results directory
+        mkdir -p ci-results
+        
+        # Basic load test
+        docker run --rm \
+          --network ci-perf-network \
+          apache-bench:ci \
+          ab -n 1000 -c 10 http://test-webapp-ci:3000/ > ci-results/basic-load-test.txt
+        
+        # High concurrency test
+        docker run --rm \
+          --network ci-perf-network \
+          apache-bench:ci \
+          ab -n 2000 -c 50 http://test-webapp-ci:3000/ > ci-results/high-concurrency-test.txt
+        
+        # Siege test
+        docker run --rm \
+          --network ci-perf-network \
+          siege-bench:ci \
+          siege -c 20 -t 30s http://test-webapp-ci:3000/ > ci-results/siege-test.txt
+    
+    - name: Analyze performance results
+      run: |
+        # Extract key metrics
+        echo "=== Performance Test Results ===" > ci-results/summary.txt
+        echo "Timestamp: $(date)" >> ci-results/summary.txt
+        echo "" >> ci-results/summary.txt
+        
+        # Basic load test metrics
+        echo "Basic Load Test:" >> ci-results/summary.txt
+        grep "Requests per second" ci-results/basic-load-test.txt >> ci-results/summary.txt
+        grep "Time per request" ci-results/basic-load-test.txt | head -n1 >> ci-results/summary.txt
+        grep "Failed requests" ci-results/basic-load-test.txt >> ci-results/summary.txt
+        echo "" >> ci-results/summary.txt
+        
+        # High concurrency test metrics
+        echo "High Concurrency Test:" >> ci-results/summary.txt
+        grep "Requests per second" ci-results/high-concurrency-test.txt >> ci-results/summary.txt
+        grep "Failed requests" ci-results/high-concurrency-test.txt >> ci-results/summary.txt
+        echo "" >> ci-results/summary.txt
+        
+        # Siege test metrics
+        echo "Siege Test:" >> ci-results/summary.txt
+        grep "Transaction rate" ci-results/siege-test.txt >> ci-results/summary.txt
+        grep "Availability" ci-results/siege-test.txt >> ci-results/summary.txt
+        echo "" >> ci-results/summary.txt
+        
+        # Display summary
+        cat ci-results/summary.txt
+    
+    - name: Performance regression check
+      run: |
+        # Simple performance regression check
+        # Extract requests per second from basic load test
+        RPS=$(grep "Requests per second" ci-results/basic-load-test.txt | awk '{print $4}')
+        FAILED_REQUESTS=$(grep "Failed requests" ci-results/basic-load-test.txt | awk '{print $3}')
+        
+        echo "Current RPS: $RPS"
+        echo "Failed Requests: $FAILED_REQUESTS"
+        
+        # Set performance thresholds
+        MIN_RPS=50
+        MAX_FAILED_REQUESTS=0
+        
+        # Check if performance meets minimum requirements
+        if (( $(echo "$RPS < $MIN_RPS" | bc -l) )); then
+          echo "❌ Performance regression detected: RPS ($RPS) below threshold ($MIN_RPS)"
+          exit 1
+        fi
+        
+        if [ "$FAILED_REQUESTS" -gt "$MAX_FAILED_REQUESTS" ]; then
+          echo "❌ Reliability issue detected: $FAILED_REQUESTS failed requests"
+          exit 1
+        fi
+        
+        echo "✅ Performance tests passed!"
+    
+    - name: Upload performance results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: performance-test-results
+        path: ci-results/
+        retention-days: 30
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        docker stop test-webapp-ci || true
+        docker rm test-webapp-ci || true
+        docker network rm ci-perf-network || true
+EOF
+Subtask 5.2: Create Local CI Simulation
+Create a local CI simulation script:
+cat > simulate_ci.sh << 'EOF'
+#!/bin/bash
+
+echo "=== Simulating CI Pipeline Performance Tests ==="
+echo "This script simulates the GitHub Actions workflow locally"
+echo
+
+# Set up environment
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+CI_RESULTS_DIR="ci-simulation-${TIMESTAMP}"
+mkdir -p ${CI_RESULTS_DIR}
+
+echo "Results will be saved to: ${CI_RESULTS_DIR}"
+echo
+
+# Step 1: Build images
+echo "Step 1: Building Docker images..."
+docker build -f Dockerfile.webapp -t test-webapp:ci . > ${CI_RESULTS_DIR}/build.log 2>&1
+docker build -f Dockerfile.ab -t apache-bench:ci . >> ${CI_RESULTS_DIR}/build.log 2>&1
+docker build -f Dockerfile.siege -t siege-bench:ci . >> ${CI_RESULTS_DIR}/build.log 2>&1
+
+if [ $? -eq 0 ]; then
+    echo "✅ Docker images built successfully"
+else
+    echo "❌ Failed to build Docker images"
+    exit 1
+fi
+
+# Step 2: Create network and start application
+echo "Step 2: Starting test environment..."
+docker network create ci-perf-network > /dev/null 2>&1
+
+docker run -d \
+    --name test-webapp-ci \
+    --network ci-perf-network \
+    -p 3001:3000 \
+    test-webapp:ci
+
+# Wait for application to be ready
+echo "Waiting for application to start..."
+sleep 10
+
+# Health check
+for i in {1..5}; do
+    if curl -s http://localhost:3001/ > /dev/null; then
+        echo "✅ Application is ready"
+        break
+    else
+        echo "Waiting for application... (attempt $i
