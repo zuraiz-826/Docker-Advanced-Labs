@@ -1,0 +1,880 @@
+Lab 53: Docker in Production - Setting Up Auto-Scaling with Docker Swarm
+Objectives
+By the end of this lab, you will be able to:
+
+Set up and configure a Docker Swarm cluster for production use
+Deploy web services to a Docker Swarm cluster
+Configure auto-scaling policies based on resource usage and metrics
+Simulate traffic load to test scaling behavior
+Monitor service scaling using Docker Swarm commands
+Implement load balancing strategies for scaled services
+Understand production-ready Docker Swarm deployment patterns
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Docker containers and images
+Familiarity with Linux command line operations
+Knowledge of web services and HTTP protocols
+Understanding of basic networking concepts
+Experience with text editors like nano or vim
+Required Knowledge Level: Beginner to Intermediate Docker experience
+
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own VM or install Docker manually.
+
+Your lab environment includes:
+
+Ubuntu 20.04 LTS with Docker Engine pre-installed
+Docker Compose pre-configured
+Network access for multi-node simulation
+Monitoring tools pre-installed
+Task 1: Initialize Docker Swarm Cluster
+Subtask 1.1: Verify Docker Installation and Initialize Swarm
+First, let's verify that Docker is properly installed and initialize our Swarm cluster.
+
+# Check Docker version and status
+docker --version
+docker info
+
+# Initialize Docker Swarm mode
+docker swarm init --advertise-addr $(hostname -I | awk '{print $1}')
+Expected Output: You should see a message indicating that the Swarm has been initialized, along with a join token for worker nodes.
+
+Subtask 1.2: Verify Swarm Status
+# Check Swarm status
+docker info | grep -A 10 "Swarm:"
+
+# List nodes in the cluster
+docker node ls
+The output should show your current node as a manager with "Leader" status.
+
+Subtask 1.3: Create Overlay Network for Services
+# Create an overlay network for our services
+docker network create --driver overlay --attachable web-network
+
+# Verify network creation
+docker network ls
+Task 2: Deploy a Web Service to Docker Swarm
+Subtask 2.1: Create a Simple Web Application
+Let's create a simple web application that we can scale. First, create the application files:
+
+# Create project directory
+mkdir ~/swarm-scaling-lab
+cd ~/swarm-scaling-lab
+
+# Create a simple Node.js web application
+cat > app.js << 'EOF'
+const express = require('express');
+const os = require('os');
+const app = express();
+const port = 3000;
+
+// Middleware to log requests
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url} from ${req.ip}`);
+    next();
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        hostname: os.hostname(),
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Main endpoint
+app.get('/', (req, res) => {
+    res.json({
+        message: 'Hello from Docker Swarm!',
+        hostname: os.hostname(),
+        pid: process.pid,
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Load simulation endpoint
+app.get('/load', (req, res) => {
+    const start = Date.now();
+    // Simulate CPU intensive task
+    while (Date.now() - start < 1000) {
+        Math.random();
+    }
+    res.json({
+        message: 'Load simulation completed',
+        hostname: os.hostname(),
+        duration: '1000ms'
+    });
+});
+
+app.listen(port, '0.0.0.0', () => {
+    console.log(`App running on http://0.0.0.0:${port}`);
+    console.log(`Hostname: ${os.hostname()}`);
+});
+EOF
+Subtask 2.2: Create Package.json and Dockerfile
+# Create package.json
+cat > package.json << 'EOF'
+{
+  "name": "swarm-scaling-demo",
+  "version": "1.0.0",
+  "description": "Demo app for Docker Swarm scaling",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
+EOF
+
+# Create Dockerfile
+cat > Dockerfile << 'EOF'
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package.json .
+RUN npm install
+
+COPY app.js .
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
+
+CMD ["npm", "start"]
+EOF
+Subtask 2.3: Build and Deploy the Service
+# Build the Docker image
+docker build -t swarm-web-app:v1 .
+
+# Deploy the service to Swarm
+docker service create \
+  --name web-service \
+  --replicas 2 \
+  --network web-network \
+  --publish 8080:3000 \
+  --health-cmd "curl -f http://localhost:3000/health || exit 1" \
+  --health-interval 30s \
+  --health-retries 3 \
+  --health-timeout 10s \
+  swarm-web-app:v1
+
+# Verify service deployment
+docker service ls
+docker service ps web-service
+Subtask 2.4: Test the Deployed Service
+# Test the service
+curl http://localhost:8080
+curl http://localhost:8080/health
+
+# Test multiple times to see load balancing
+for i in {1..5}; do
+  echo "Request $i:"
+  curl -s http://localhost:8080 | grep hostname
+  sleep 1
+done
+Task 3: Configure Auto-Scaling Policies
+Subtask 3.1: Create Monitoring Stack
+First, let's set up monitoring to track resource usage:
+
+# Create monitoring directory
+mkdir ~/monitoring
+cd ~/monitoring
+
+# Create Prometheus configuration
+cat > prometheus.yml << 'EOF'
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['localhost:9323']
+  
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+  
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+EOF
+
+# Deploy monitoring stack
+docker service create \
+  --name prometheus \
+  --network web-network \
+  --publish 9090:9090 \
+  --mount type=bind,source=/home/$(whoami)/monitoring/prometheus.yml,target=/etc/prometheus/prometheus.yml \
+  prom/prometheus
+
+# Deploy cAdvisor for container metrics
+docker service create \
+  --name cadvisor \
+  --network web-network \
+  --publish 8081:8080 \
+  --mount type=bind,source=/,target=/rootfs,readonly \
+  --mount type=bind,source=/var/run,target=/var/run \
+  --mount type=bind,source=/sys,target=/sys,readonly \
+  --mount type=bind,source=/var/lib/docker,target=/var/lib/docker,readonly \
+  gcr.io/cadvisor/cadvisor:latest
+
+# Deploy Node Exporter
+docker service create \
+  --name node-exporter \
+  --network web-network \
+  --publish 9100:9100 \
+  --mount type=bind,source=/proc,target=/host/proc,readonly \
+  --mount type=bind,source=/sys,target=/host/sys,readonly \
+  --mount type=bind,source=/,target=/rootfs,readonly \
+  prom/node-exporter \
+  --path.procfs=/host/proc \
+  --path.sysfs=/host/sys \
+  --collector.filesystem.ignored-mount-points="^/(sys|proc|dev|host|etc)($$|/)"
+Subtask 3.2: Create Auto-Scaling Script
+# Return to main project directory
+cd ~/swarm-scaling-lab
+
+# Create auto-scaling script
+cat > autoscaler.sh << 'EOF'
+#!/bin/bash
+
+SERVICE_NAME="web-service"
+MIN_REPLICAS=2
+MAX_REPLICAS=10
+SCALE_UP_THRESHOLD=70
+SCALE_DOWN_THRESHOLD=30
+CHECK_INTERVAL=30
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+get_cpu_usage() {
+    # Get CPU usage from cAdvisor metrics
+    local cpu_usage=$(curl -s http://localhost:8081/metrics | \
+        grep 'container_cpu_usage_seconds_total{name="' | \
+        grep "$SERVICE_NAME" | \
+        tail -1 | \
+        awk '{print $2}')
+    
+    # If cAdvisor is not available, simulate CPU usage based on load
+    if [ -z "$cpu_usage" ]; then
+        # Simulate CPU usage (in production, use real metrics)
+        echo $((RANDOM % 100))
+    else
+        echo "50" # Simplified for demo
+    fi
+}
+
+get_current_replicas() {
+    docker service inspect --format='{{.Spec.Mode.Replicated.Replicas}}' $SERVICE_NAME 2>/dev/null || echo "0"
+}
+
+scale_service() {
+    local new_replicas=$1
+    log "Scaling $SERVICE_NAME to $new_replicas replicas"
+    docker service scale $SERVICE_NAME=$new_replicas
+}
+
+while true; do
+    current_replicas=$(get_current_replicas)
+    cpu_usage=$(get_cpu_usage)
+    
+    log "Current replicas: $current_replicas, CPU usage: $cpu_usage%"
+    
+    if [ "$cpu_usage" -gt "$SCALE_UP_THRESHOLD" ] && [ "$current_replicas" -lt "$MAX_REPLICAS" ]; then
+        new_replicas=$((current_replicas + 1))
+        log "High CPU usage detected. Scaling up to $new_replicas replicas"
+        scale_service $new_replicas
+    elif [ "$cpu_usage" -lt "$SCALE_DOWN_THRESHOLD" ] && [ "$current_replicas" -gt "$MIN_REPLICAS" ]; then
+        new_replicas=$((current_replicas - 1))
+        log "Low CPU usage detected. Scaling down to $new_replicas replicas"
+        scale_service $new_replicas
+    else
+        log "No scaling action needed"
+    fi
+    
+    sleep $CHECK_INTERVAL
+done
+EOF
+
+# Make the script executable
+chmod +x autoscaler.sh
+Subtask 3.3: Create Advanced Scaling Script with Multiple Metrics
+# Create advanced autoscaler
+cat > advanced_autoscaler.sh << 'EOF'
+#!/bin/bash
+
+SERVICE_NAME="web-service"
+MIN_REPLICAS=2
+MAX_REPLICAS=8
+CHECK_INTERVAL=20
+
+# Thresholds
+CPU_SCALE_UP_THRESHOLD=70
+CPU_SCALE_DOWN_THRESHOLD=20
+MEMORY_SCALE_UP_THRESHOLD=80
+RESPONSE_TIME_THRESHOLD=2000  # milliseconds
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+get_service_metrics() {
+    local replicas=$(docker service inspect --format='{{.Spec.Mode.Replicated.Replicas}}' $SERVICE_NAME 2>/dev/null || echo "0")
+    local running_tasks=$(docker service ps $SERVICE_NAME --filter "desired-state=running" --format "table {{.ID}}" | tail -n +2 | wc -l)
+    
+    echo "replicas:$replicas,running:$running_tasks"
+}
+
+test_response_time() {
+    local start_time=$(date +%s%3N)
+    curl -s http://localhost:8080/health > /dev/null
+    local end_time=$(date +%s%3N)
+    local response_time=$((end_time - start_time))
+    echo $response_time
+}
+
+make_scaling_decision() {
+    local current_replicas=$1
+    local response_time=$2
+    
+    # Simulate load-based decision making
+    local load_factor=$((RANDOM % 100))
+    
+    if [ "$response_time" -gt "$RESPONSE_TIME_THRESHOLD" ] || [ "$load_factor" -gt 75 ]; then
+        if [ "$current_replicas" -lt "$MAX_REPLICAS" ]; then
+            echo "scale_up"
+        else
+            echo "no_action"
+        fi
+    elif [ "$load_factor" -lt 25 ] && [ "$current_replicas" -gt "$MIN_REPLICAS" ]; then
+        echo "scale_down"
+    else
+        echo "no_action"
+    fi
+}
+
+while true; do
+    metrics=$(get_service_metrics)
+    current_replicas=$(echo $metrics | cut -d',' -f1 | cut -d':' -f2)
+    running_tasks=$(echo $metrics | cut -d',' -f2 | cut -d':' -f2)
+    
+    response_time=$(test_response_time)
+    decision=$(make_scaling_decision $current_replicas $response_time)
+    
+    log "Replicas: $current_replicas, Running: $running_tasks, Response time: ${response_time}ms"
+    
+    case $decision in
+        "scale_up")
+            new_replicas=$((current_replicas + 1))
+            log "Scaling UP to $new_replicas replicas (High load detected)"
+            docker service scale $SERVICE_NAME=$new_replicas
+            ;;
+        "scale_down")
+            new_replicas=$((current_replicas - 1))
+            log "Scaling DOWN to $new_replicas replicas (Low load detected)"
+            docker service scale $SERVICE_NAME=$new_replicas
+            ;;
+        *)
+            log "No scaling action needed"
+            ;;
+    esac
+    
+    sleep $CHECK_INTERVAL
+done
+EOF
+
+chmod +x advanced_autoscaler.sh
+Task 4: Test Scaling by Simulating Traffic Load
+Subtask 4.1: Create Load Testing Scripts
+# Create simple load generator
+cat > load_generator.sh << 'EOF'
+#!/bin/bash
+
+TARGET_URL="http://localhost:8080"
+CONCURRENT_USERS=5
+DURATION=300  # 5 minutes
+REQUEST_DELAY=1
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+generate_load() {
+    local user_id=$1
+    local end_time=$(($(date +%s) + DURATION))
+    
+    while [ $(date +%s) -lt $end_time ]; do
+        # Mix of regular and load-intensive requests
+        if [ $((RANDOM % 3)) -eq 0 ]; then
+            curl -s "$TARGET_URL/load" > /dev/null
+        else
+            curl -s "$TARGET_URL" > /dev/null
+        fi
+        
+        sleep $REQUEST_DELAY
+    done
+    
+    log "User $user_id finished load generation"
+}
+
+log "Starting load test with $CONCURRENT_USERS concurrent users for $DURATION seconds"
+
+# Start concurrent load generators
+for i in $(seq 1 $CONCURRENT_USERS); do
+    generate_load $i &
+done
+
+# Wait for all background jobs to complete
+wait
+
+log "Load test completed"
+EOF
+
+chmod +x load_generator.sh
+Subtask 4.2: Create Intensive Load Testing Script
+# Create intensive load tester
+cat > intensive_load.sh << 'EOF'
+#!/bin/bash
+
+TARGET_URL="http://localhost:8080"
+RAMP_UP_USERS=10
+SUSTAINED_USERS=20
+RAMP_UP_DURATION=60
+SUSTAINED_DURATION=180
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+single_user_load() {
+    local user_id=$1
+    local duration=$2
+    local end_time=$(($(date +%s) + duration))
+    
+    while [ $(date +%s) -lt $end_time ]; do
+        # Aggressive load pattern
+        curl -s "$TARGET_URL/load" > /dev/null &
+        curl -s "$TARGET_URL" > /dev/null &
+        curl -s "$TARGET_URL/health" > /dev/null &
+        wait
+        sleep 0.5
+    done
+}
+
+log "Phase 1: Ramping up to $RAMP_UP_USERS users over $RAMP_UP_DURATION seconds"
+
+# Phase 1: Ramp up
+for i in $(seq 1 $RAMP_UP_USERS); do
+    single_user_load $i $RAMP_UP_DURATION &
+    sleep $((RAMP_UP_DURATION / RAMP_UP_USERS))
+done
+
+sleep $RAMP_UP_DURATION
+
+log "Phase 2: Sustained load with $SUSTAINED_USERS users for $SUSTAINED_DURATION seconds"
+
+# Phase 2: Sustained load
+for i in $(seq 1 $SUSTAINED_USERS); do
+    single_user_load $i $SUSTAINED_DURATION &
+done
+
+wait
+
+log "Intensive load test completed"
+EOF
+
+chmod +x intensive_load.sh
+Subtask 4.3: Execute Load Tests
+Open multiple terminal windows or use screen/tmux to run these simultaneously:
+
+Terminal 1 - Start Autoscaler:
+
+cd ~/swarm-scaling-lab
+./advanced_autoscaler.sh
+Terminal 2 - Monitor Services:
+
+# Monitor service scaling in real-time
+watch -n 5 'docker service ls && echo "=== Service Tasks ===" && docker service ps web-service'
+Terminal 3 - Generate Load:
+
+cd ~/swarm-scaling-lab
+
+# Start with moderate load
+./load_generator.sh
+
+# Wait a few minutes, then run intensive load
+sleep 60
+./intensive_load.sh
+Task 5: Monitor Service Scaling
+Subtask 5.1: Real-time Monitoring Commands
+# Monitor service status continuously
+watch -n 3 'echo "=== Service Overview ===" && docker service ls && echo -e "\n=== Web Service Details ===" && docker service ps web-service --format "table {{.ID}}\t{{.Name}}\t{{.Node}}\t{{.CurrentState}}\t{{.DesiredState}}"'
+Subtask 5.2: Create Monitoring Dashboard Script
+# Create monitoring dashboard
+cat > monitor_dashboard.sh << 'EOF'
+#!/bin/bash
+
+SERVICE_NAME="web-service"
+REFRESH_INTERVAL=5
+
+show_dashboard() {
+    clear
+    echo "======================================"
+    echo "   Docker Swarm Scaling Dashboard"
+    echo "======================================"
+    echo "Timestamp: $(date)"
+    echo ""
+    
+    echo "--- Service Overview ---"
+    docker service ls --format "table {{.Name}}\t{{.Mode}}\t{{.Replicas}}\t{{.Image}}\t{{.Ports}}"
+    echo ""
+    
+    echo "--- $SERVICE_NAME Task Details ---"
+    docker service ps $SERVICE_NAME --format "table {{.Name}}\t{{.Node}}\t{{.CurrentState}}\t{{.DesiredState}}\t{{.Error}}" --no-trunc
+    echo ""
+    
+    echo "--- Node Information ---"
+    docker node ls --format "table {{.Hostname}}\t{{.Status}}\t{{.Availability}}\t{{.ManagerStatus}}"
+    echo ""
+    
+    echo "--- Recent Service Logs (last 10 lines) ---"
+    docker service logs --tail 10 $SERVICE_NAME 2>/dev/null | tail -10
+    echo ""
+    
+    echo "--- System Resources ---"
+    echo "CPU Usage: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)%"
+    echo "Memory Usage: $(free | grep Mem | awk '{printf "%.1f%%", $3/$2 * 100.0}')"
+    echo "Load Average: $(uptime | awk -F'load average:' '{print $2}')"
+    echo ""
+    
+    echo "Press Ctrl+C to exit"
+}
+
+trap 'echo "Monitoring stopped"; exit 0' INT
+
+while true; do
+    show_dashboard
+    sleep $REFRESH_INTERVAL
+done
+EOF
+
+chmod +x monitor_dashboard.sh
+Subtask 5.3: Service Inspection and Logging
+# Inspect service configuration
+docker service inspect web-service --pretty
+
+# View service logs with timestamps
+docker service logs --follow --timestamps web-service
+
+# Check service events
+docker service ps web-service --no-trunc
+
+# Monitor service scaling events
+docker events --filter service=web-service --filter type=service
+Task 6: Implement Load Balancing
+Subtask 6.1: Configure Advanced Load Balancing
+# Update service with load balancing configuration
+docker service update \
+  --publish-rm 8080:3000 \
+  --publish-add published=8080,target=3000,mode=ingress \
+  --endpoint-mode vip \
+  web-service
+
+# Add labels for better load balancing
+docker service update \
+  --label-add "traefik.enable=true" \
+  --label-add "traefik.http.routers.web.rule=Host(\`localhost\`)" \
+  --label-add "traefik.http.services.web.loadbalancer.server.port=3000" \
+  web-service
+Subtask 6.2: Deploy Traefik Load Balancer
+# Create Traefik configuration
+mkdir -p ~/traefik
+cd ~/traefik
+
+cat > traefik.yml << 'EOF'
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    swarmMode: true
+    exposedByDefault: false
+    network: web-network
+
+log:
+  level: INFO
+EOF
+
+# Deploy Traefik as a service
+docker service create \
+  --name traefik \
+  --constraint 'node.role==manager' \
+  --publish 80:80 \
+  --publish 8082:8080 \
+  --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock \
+  --mount type=bind,source=/home/$(whoami)/traefik/traefik.yml,target=/etc/traefik/traefik.yml \
+  --network web-network \
+  traefik:v2.10
+Subtask 6.3: Configure Service for Traefik Load Balancing
+# Update web service for Traefik
+docker service update \
+  --label-add "traefik.enable=true" \
+  --label-add "traefik.http.routers.webapp.rule=Host(\`localhost\`) || PathPrefix(\`/app\`)" \
+  --label-add "traefik.http.services.webapp.loadbalancer.server.port=3000" \
+  --label-add "traefik.http.routers.webapp.entrypoints=web" \
+  --publish-rm 8080:3000 \
+  web-service
+
+# Verify Traefik dashboard
+echo "Traefik dashboard available at: http://localhost:8082"
+echo "Web application available at: http://localhost/app"
+Subtask 6.4: Test Load Balancing
+# Test load balancing through Traefik
+for i in {1..10}; do
+  echo "Request $i:"
+  curl -s http://localhost/app | jq '.hostname' 2>/dev/null || curl -s http://localhost/app | grep hostname
+  sleep 1
+done
+
+# Test with concurrent requests
+cat > test_load_balancing.sh << 'EOF'
+#!/bin/bash
+
+URL="http://localhost/app"
+REQUESTS=50
+CONCURRENT=10
+
+echo "Testing load balancing with $REQUESTS requests, $CONCURRENT concurrent"
+
+# Function to make requests and capture hostname
+make_requests() {
+    for i in $(seq 1 $((REQUESTS / CONCURRENT))); do
+        hostname=$(curl -s $URL | jq -r '.hostname' 2>/dev/null || echo "unknown")
+        echo "Thread $1: Request $i -> $hostname"
+        sleep 0.1
+    done
+}
+
+# Start concurrent request threads
+for i in $(seq 1 $CONCURRENT); do
+    make_requests $i &
+done
+
+wait
+
+echo "Load balancing test completed"
+EOF
+
+chmod +x test_load_balancing.sh
+./test_load_balancing.sh
+Task 7: Advanced Scaling Scenarios
+Subtask 7.1: Implement Rolling Updates During Scaling
+# Create new version of the application
+cat > app_v2.js << 'EOF'
+const express = require('express');
+const os = require('os');
+const app = express();
+const port = 3000;
+
+app.use((req, res, next) => {
+    console.log(`${new Date().toISOString()} - ${req.method} ${req.url} from ${req.ip}`);
+    next();
+});
+
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        version: '2.0',
+        hostname: os.hostname(),
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString()
+    });
+});
+
+app.get('/', (req, res) => {
+    res.json({
+        message: 'Hello from Docker Swarm v2.0!',
+        version: '2.0',
+        hostname: os.hostname(),
+        pid: process.pid,
+        uptime: process.uptime(),
+        timestamp: new Date().toISOString(),
+        features: ['auto-scaling', 'load-balancing', 'health-checks']
+    });
+});
+
+app.get('/load', (req, res) => {
+    const start = Date.now();
+    // Optimized load simulation
+    while (Date.now() - start < 500) {
+        Math.random();
+    }
+    res.json({
+        message: 'Optimized load simulation completed',
+        version: '2.0',
+        hostname: os.hostname(),
+        duration: '500ms'
+    });
+});
+
+app.listen(port, '0.0.0.0', () => {
+    console.log(`App v2.0 running on http://0.0.0.0:${port}`);
+    console.log(`Hostname: ${os.hostname()}`);
+});
+EOF
+
+# Build new version
+docker build -t swarm-web-app:v2 --build-arg APP_FILE=app_v2.js .
+
+# Perform rolling update
+docker service update \
+  --image swarm-web-app:v2 \
+  --update-parallelism 1 \
+  --update-delay 30s \
+  --update-order start-first \
+  web-service
+Subtask 7.2: Implement Health-Check Based Scaling
+# Create health-aware autoscaler
+cat > health_autoscaler.sh << 'EOF'
+#!/bin/bash
+
+SERVICE_NAME="web-service"
+MIN_REPLICAS=2
+MAX_REPLICAS=6
+CHECK_INTERVAL=15
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+}
+
+get_healthy_replicas() {
+    docker service ps $SERVICE_NAME --filter "desired-state=running" --format "{{.CurrentState}}" | grep -c "Running"
+}
+
+get_total_replicas() {
+    docker service inspect --format='{{.Spec.Mode.Replicated.Replicas}}' $SERVICE_NAME
+}
+
+check_service_health() {
+    local healthy_count=$(get_healthy_replicas)
+    local total_count=$(get_total_replicas)
+    local health_ratio=$((healthy_count * 100 / total_count))
+    
+    echo "$health_ratio"
+}
+
+while true; do
+    total_replicas=$(get_total_replicas)
+    healthy_replicas=$(get_healthy_replicas)
+    health_ratio=$(check_service_health)
+    
+    log "Total: $total_replicas, Healthy: $healthy_replicas, Health ratio: $health_ratio%"
+    
+    if [ "$health_ratio" -lt 75 ] && [ "$total_replicas" -lt "$MAX_REPLICAS" ]; then
+        new_replicas=$((total_replicas + 1))
+        log "Low health ratio detected. Scaling up to $new_replicas replicas"
+        docker service scale $SERVICE_NAME=$new_replicas
+    elif [ "$health_ratio" -eq 100 ] && [ "$healthy_replicas" -gt "$MIN_REPLICAS" ]; then
+        # Only scale down if we have excess healthy replicas
+        if [ "$healthy_replicas" -gt $((MIN_REPLICAS + 1)) ]; then
+            new_replicas=$((total_replicas - 1))
+            log "Excess healthy replicas. Scaling down to $new_replicas replicas"
+            docker service scale $SERVICE_NAME=$new_replicas
+        fi
+    fi
+    
+    sleep $CHECK_INTERVAL
+done
+EOF
+
+chmod +x health_autoscaler.sh
+Task 8: Cleanup and Resource Management
+Subtask 8.1: Graceful Service Shutdown
+# Stop autoscaling scripts (if running in background)
+pkill -f autoscaler.sh
+
+# Scale down services gracefully
+docker service scale web-service=1
+docker service scale traefik=0
+docker service scale prometheus=0
+docker service scale cadvisor=0
+docker service scale node-exporter=0
+
+# Wait for services to scale down
+sleep 30
+
+# Remove services
+docker service rm web-service traefik prometheus cadvisor node-exporter
+
+# Remove networks
+docker network rm web-network
+
+# Clean up images (optional)
+docker image prune -f
+Subtask 8.2: Leave Swarm Mode
+# Leave swarm mode (this will remove all swarm-specific configurations)
+docker swarm leave --force
+
+# Verify swarm mode is disabled
+docker info | grep -A 5 "Swarm:"
+Troubleshooting Guide
+Common Issues and Solutions
+Issue 1: Service fails to start
+
+# Check service logs
+docker service logs web-service
+
+# Inspect service details
+docker service inspect web-service --pretty
+
+# Check node resources
+docker node ls
+docker system df
+Issue 2: Scaling not working
+
+# Verify service constraints
+docker service inspect web-service --format='{{json .Spec.TaskTemplate.Placement}}'
+
+# Check node availability
+docker node ls --format "table {{.Hostname}}\t{{.Status}}\t{{.Availability}}"
+
+# Manual scaling test
+docker service scale web-service=3
+Issue 3: Load balancing issues
+
+# Check network connectivity
+docker network ls
+docker network inspect web-network
+
+# Test service endpoints
+docker service ps web-service --format "table {{.Name}}\t{{.Node}}\t{{.CurrentState}}"
+
+# Verify port publishing
+docker service inspect web-service --format='{{json .Endpoint.Ports}}'
+Issue 4: Monitoring not working
+
+# Check if monitoring services are running
+docker service ls | grep -E "(prometheus|cadvisor|node-exporter)"
+
+# Test metrics endpoints
+curl http://localhost:9090/metrics
+curl http://localhost:8081/metrics
+curl http://localhost:9100/metrics
