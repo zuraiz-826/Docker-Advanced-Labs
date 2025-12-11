@@ -1,0 +1,877 @@
+Lab 71: Docker for High-Performance Computing - Using Docker for HPC Workloads
+Objectives
+By the end of this lab, students will be able to:
+
+Set up Docker containers optimized for high-performance computing workloads
+Deploy and configure a distributed MPI (Message Passing Interface) environment using Docker
+Benchmark and analyze the performance of containerized HPC applications
+Scale containerized HPC tasks across multiple nodes in a cluster
+Integrate Docker-based HPC solutions with cloud platforms for elastic computing
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Fundamental knowledge of Docker concepts (containers, images, volumes)
+Basic understanding of parallel computing concepts
+Familiarity with network configuration basics
+Access to a text editor (nano, vim, or similar)
+Note: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own VM or install Docker manually.
+
+Lab Environment Setup
+Your Al Nafi cloud machine comes pre-installed with:
+
+Docker Engine (latest stable version)
+Docker Compose
+Basic development tools
+Network utilities
+Task 1: Set up a Docker Container for Running Parallel Computing Tasks
+Subtask 1.1: Create a Base HPC Docker Image
+First, let's create a Dockerfile for our HPC environment with essential parallel computing tools.
+
+# Create a working directory for our HPC lab
+mkdir ~/hpc-docker-lab
+cd ~/hpc-docker-lab
+Create a Dockerfile for our HPC base image:
+
+nano Dockerfile.hpc-base
+Add the following content:
+
+FROM ubuntu:22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV OMPI_ALLOW_RUN_AS_ROOT=1
+ENV OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+# Install essential packages
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gfortran \
+    openmpi-bin \
+    openmpi-common \
+    libopenmpi-dev \
+    python3 \
+    python3-pip \
+    python3-numpy \
+    python3-scipy \
+    python3-mpi4py \
+    htop \
+    vim \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a working directory
+WORKDIR /hpc
+
+# Copy application files (will be added later)
+COPY . /hpc/
+
+# Set default command
+CMD ["/bin/bash"]
+Subtask 1.2: Create a Simple Parallel Computing Application
+Create a sample MPI application to test our setup:
+
+nano hello_mpi.c
+Add the following C code:
+
+#include <mpi.h>
+#include <stdio.h>
+#include <unistd.h>
+
+int main(int argc, char** argv) {
+    MPI_Init(NULL, NULL);
+    
+    int world_size;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    
+    int world_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    
+    char hostname[256];
+    gethostname(hostname, sizeof(hostname));
+    
+    printf("Hello from processor %d out of %d processors on host %s\n", 
+           world_rank, world_size, hostname);
+    
+    MPI_Finalize();
+    return 0;
+}
+Create a Python MPI example as well:
+
+nano hello_mpi.py
+#!/usr/bin/env python3
+from mpi4py import MPI
+import socket
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+hostname = socket.gethostname()
+
+print(f"Hello from rank {rank} of {size} on host {hostname}")
+Subtask 1.3: Build and Test the HPC Container
+Build the Docker image:
+
+docker build -f Dockerfile.hpc-base -t hpc-base:latest .
+Test the container with a simple run:
+
+docker run --rm -it hpc-base:latest mpicc --version
+Compile and test the MPI application:
+
+docker run --rm -v $(pwd):/hpc hpc-base:latest bash -c "
+cd /hpc && 
+mpicc -o hello_mpi hello_mpi.c && 
+mpirun -np 4 --allow-run-as-root ./hello_mpi
+"
+Test the Python MPI application:
+
+docker run --rm -v $(pwd):/hpc hpc-base:latest bash -c "
+cd /hpc && 
+mpirun -np 4 --allow-run-as-root python3 hello_mpi.py
+"
+Task 2: Deploy a Distributed MPI Environment Using Docker
+Subtask 2.1: Create a Multi-Container MPI Setup
+Create a Docker Compose file for distributed MPI:
+
+nano docker-compose.mpi.yml
+version: '3.8'
+
+services:
+  mpi-master:
+    image: hpc-base:latest
+    container_name: mpi-master
+    hostname: mpi-master
+    networks:
+      - mpi-network
+    volumes:
+      - .:/hpc
+      - mpi-shared:/shared
+    command: tail -f /dev/null
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+  mpi-worker1:
+    image: hpc-base:latest
+    container_name: mpi-worker1
+    hostname: mpi-worker1
+    networks:
+      - mpi-network
+    volumes:
+      - .:/hpc
+      - mpi-shared:/shared
+    command: tail -f /dev/null
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+  mpi-worker2:
+    image: hpc-base:latest
+    container_name: mpi-worker2
+    hostname: mpi-worker2
+    networks:
+      - mpi-network
+    volumes:
+      - .:/hpc
+      - mpi-shared:/shared
+    command: tail -f /dev/null
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+networks:
+  mpi-network:
+    driver: bridge
+
+volumes:
+  mpi-shared:
+Subtask 2.2: Configure SSH for MPI Communication
+Create an enhanced Dockerfile with SSH support:
+
+nano Dockerfile.mpi-cluster
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV OMPI_ALLOW_RUN_AS_ROOT=1
+ENV OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+# Install packages including SSH
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gfortran \
+    openmpi-bin \
+    openmpi-common \
+    libopenmpi-dev \
+    python3 \
+    python3-pip \
+    python3-numpy \
+    python3-scipy \
+    python3-mpi4py \
+    openssh-server \
+    openssh-client \
+    htop \
+    vim \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure SSH
+RUN mkdir /var/run/sshd
+RUN echo 'root:hpcpassword' | chpasswd
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+RUN sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+# Generate SSH keys
+RUN ssh-keygen -t rsa -f /root/.ssh/id_rsa -N ''
+RUN cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys
+RUN chmod 600 /root/.ssh/authorized_keys
+RUN echo "StrictHostKeyChecking no" >> /root/.ssh/config
+
+WORKDIR /hpc
+COPY . /hpc/
+
+# Start SSH service and keep container running
+CMD service ssh start && tail -f /dev/null
+Build the new image:
+
+docker build -f Dockerfile.mpi-cluster -t mpi-cluster:latest .
+Subtask 2.3: Launch and Test the MPI Cluster
+Update the docker-compose file to use the new image:
+
+sed -i 's/hpc-base:latest/mpi-cluster:latest/g' docker-compose.mpi.yml
+Start the MPI cluster:
+
+docker-compose -f docker-compose.mpi.yml up -d
+Verify all containers are running:
+
+docker-compose -f docker-compose.mpi.yml ps
+Test connectivity between containers:
+
+docker exec -it mpi-master bash -c "
+ping -c 3 mpi-worker1 && 
+ping -c 3 mpi-worker2
+"
+Create a hostfile for MPI:
+
+docker exec -it mpi-master bash -c "
+echo 'mpi-master slots=2' > /hpc/hostfile
+echo 'mpi-worker1 slots=2' >> /hpc/hostfile  
+echo 'mpi-worker2 slots=2' >> /hpc/hostfile
+cat /hpc/hostfile
+"
+Test distributed MPI execution:
+
+docker exec -it mpi-master bash -c "
+cd /hpc &&
+mpicc -o hello_mpi hello_mpi.c &&
+mpirun -np 6 --hostfile hostfile --allow-run-as-root ./hello_mpi
+"
+Task 3: Test the Performance of Dockerized HPC Workloads
+Subtask 3.1: Create Performance Benchmarking Applications
+Create a CPU-intensive benchmark:
+
+nano pi_calculation.c
+#include <mpi.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+int main(int argc, char** argv) {
+    int rank, size;
+    long long n = 1000000000; // Number of intervals
+    double h, sum, x, pi;
+    double start_time, end_time;
+    
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+    
+    h = 1.0 / (double)n;
+    sum = 0.0;
+    
+    start_time = MPI_Wtime();
+    
+    for (long long i = rank + 1; i <= n; i += size) {
+        x = h * ((double)i - 0.5);
+        sum += 4.0 / (1.0 + x * x);
+    }
+    
+    double local_pi = h * sum;
+    MPI_Reduce(&local_pi, &pi, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    
+    end_time = MPI_Wtime();
+    
+    if (rank == 0) {
+        printf("Calculated PI = %.15f\n", pi);
+        printf("Error = %.15f\n", pi - 3.141592653589793);
+        printf("Time taken = %.6f seconds\n", end_time - start_time);
+        printf("Processes used = %d\n", size);
+    }
+    
+    MPI_Finalize();
+    return 0;
+}
+Create a memory bandwidth test:
+
+nano memory_test.py
+#!/usr/bin/env python3
+from mpi4py import MPI
+import numpy as np
+import time
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+
+# Memory bandwidth test
+def memory_bandwidth_test(array_size):
+    # Create large arrays
+    a = np.random.rand(array_size)
+    b = np.random.rand(array_size)
+    
+    start_time = time.time()
+    
+    # Perform memory-intensive operations
+    for i in range(10):
+        c = a + b
+        d = c * 2.0
+        e = np.sqrt(d)
+    
+    end_time = time.time()
+    
+    return end_time - start_time
+
+if __name__ == "__main__":
+    array_size = 10000000  # 10M elements
+    
+    local_time = memory_bandwidth_test(array_size)
+    
+    # Gather all times to rank 0
+    all_times = comm.gather(local_time, root=0)
+    
+    if rank == 0:
+        avg_time = sum(all_times) / len(all_times)
+        max_time = max(all_times)
+        min_time = min(all_times)
+        
+        print(f"Memory Bandwidth Test Results:")
+        print(f"Processes: {size}")
+        print(f"Array size per process: {array_size}")
+        print(f"Average time: {avg_time:.4f} seconds")
+        print(f"Min time: {min_time:.4f} seconds")
+        print(f"Max time: {max_time:.4f} seconds")
+        print(f"Load balance efficiency: {min_time/max_time:.4f}")
+Subtask 3.2: Run Performance Benchmarks
+Compile and run the PI calculation benchmark:
+
+docker exec -it mpi-master bash -c "
+cd /hpc &&
+mpicc -o pi_calculation pi_calculation.c -lm &&
+echo 'Running with 1 process:' &&
+mpirun -np 1 --allow-run-as-root ./pi_calculation &&
+echo 'Running with 2 processes:' &&
+mpirun -np 2 --allow-run-as-root ./pi_calculation &&
+echo 'Running with 4 processes:' &&
+mpirun -np 4 --allow-run-as-root ./pi_calculation &&
+echo 'Running with 6 processes (distributed):' &&
+mpirun -np 6 --hostfile hostfile --allow-run-as-root ./pi_calculation
+"
+Run the memory bandwidth test:
+
+docker exec -it mpi-master bash -c "
+cd /hpc &&
+echo 'Memory bandwidth test with different process counts:' &&
+mpirun -np 1 --allow-run-as-root python3 memory_test.py &&
+mpirun -np 2 --allow-run-as-root python3 memory_test.py &&
+mpirun -np 4 --allow-run-as-root python3 memory_test.py &&
+mpirun -np 6 --hostfile hostfile --allow-run-as-root python3 memory_test.py
+"
+Subtask 3.3: Monitor Resource Usage
+Create a monitoring script:
+
+nano monitor_resources.sh
+#!/bin/bash
+
+echo "Container Resource Usage Monitoring"
+echo "=================================="
+
+while true; do
+    echo "Timestamp: $(date)"
+    echo "Docker Container Stats:"
+    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}"
+    echo ""
+    
+    echo "Host System Resources:"
+    echo "CPU Usage: $(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1)%"
+    echo "Memory Usage: $(free -h | awk 'NR==2{printf "%.1f%%", $3*100/$2}')"
+    echo "Load Average: $(uptime | awk -F'load average:' '{print $2}')"
+    echo "=================================="
+    sleep 5
+done
+Make it executable and run monitoring in background:
+
+chmod +x monitor_resources.sh
+./monitor_resources.sh &
+MONITOR_PID=$!
+Run a benchmark while monitoring:
+
+docker exec -it mpi-master bash -c "
+cd /hpc &&
+mpirun -np 6 --hostfile hostfile --allow-run-as-root ./pi_calculation
+"
+Stop monitoring:
+
+kill $MONITOR_PID
+Task 4: Scale the Containerized HPC Tasks Across Multiple Nodes
+Subtask 4.1: Create a Docker Swarm Cluster
+Initialize Docker Swarm on the current node:
+
+docker swarm init
+Note: In a real multi-node setup, you would join additional physical nodes to the swarm. For this lab, we'll simulate scaling using multiple containers.
+
+Create a Docker service for HPC workloads:
+
+nano docker-compose.swarm.yml
+version: '3.8'
+
+services:
+  hpc-service:
+    image: mpi-cluster:latest
+    deploy:
+      replicas: 4
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    networks:
+      - hpc-overlay
+    volumes:
+      - hpc-shared:/shared
+    environment:
+      - OMPI_ALLOW_RUN_AS_ROOT=1
+      - OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+    command: >
+      bash -c "
+      service ssh start &&
+      echo 'HPC Node Ready' &&
+      tail -f /dev/null
+      "
+
+networks:
+  hpc-overlay:
+    driver: overlay
+    attachable: true
+
+volumes:
+  hpc-shared:
+    driver: local
+Deploy the HPC service stack:
+
+docker stack deploy -c docker-compose.swarm.yml hpc-stack
+Subtask 4.2: Test Scaling Capabilities
+Check the deployed services:
+
+docker service ls
+docker service ps hpc-stack_hpc-service
+Scale the service up:
+
+docker service scale hpc-stack_hpc-service=6
+Verify scaling:
+
+docker service ps hpc-stack_hpc-service
+Create a distributed computation test:
+
+nano distributed_test.py
+#!/usr/bin/env python3
+from mpi4py import MPI
+import numpy as np
+import time
+import socket
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+size = comm.Get_size()
+hostname = socket.gethostname()
+
+def distributed_matrix_multiply(n):
+    """Distributed matrix multiplication"""
+    # Create matrices
+    if rank == 0:
+        A = np.random.rand(n, n)
+        B = np.random.rand(n, n)
+    else:
+        A = None
+        B = None
+    
+    # Broadcast matrices to all processes
+    A = comm.bcast(A, root=0)
+    B = comm.bcast(B, root=0)
+    
+    # Calculate portion of work for each process
+    rows_per_proc = n // size
+    start_row = rank * rows_per_proc
+    end_row = start_row + rows_per_proc if rank < size - 1 else n
+    
+    # Perform local computation
+    local_result = np.dot(A[start_row:end_row], B)
+    
+    # Gather results
+    if rank == 0:
+        result = np.zeros((n, n))
+        result[start_row:end_row] = local_result
+        
+        for i in range(1, size):
+            proc_start = i * rows_per_proc
+            proc_end = proc_start + rows_per_proc if i < size - 1 else n
+            received = comm.recv(source=i, tag=i)
+            result[proc_start:proc_end] = received
+    else:
+        comm.send(local_result, dest=0, tag=rank)
+    
+    return result if rank == 0 else None
+
+if __name__ == "__main__":
+    matrix_size = 500
+    
+    start_time = time.time()
+    result = distributed_matrix_multiply(matrix_size)
+    end_time = time.time()
+    
+    if rank == 0:
+        print(f"Distributed Matrix Multiplication Results:")
+        print(f"Matrix size: {matrix_size}x{matrix_size}")
+        print(f"Processes: {size}")
+        print(f"Time taken: {end_time - start_time:.4f} seconds")
+        print(f"Result matrix shape: {result.shape}")
+    
+    print(f"Process {rank} on host {hostname} completed")
+Subtask 4.3: Test Cross-Container Communication
+Get container IDs and test the distributed application:
+
+# Get one of the service containers
+CONTAINER_ID=$(docker ps --filter "name=hpc-stack_hpc-service" --format "{{.ID}}" | head -1)
+
+# Copy the test script to the container
+docker cp distributed_test.py $CONTAINER_ID:/hpc/
+
+# Execute the distributed test
+docker exec -it $CONTAINER_ID bash -c "
+cd /hpc &&
+mpirun -np 4 --allow-run-as-root python3 distributed_test.py
+"
+Scale down the service:
+
+docker service scale hpc-stack_hpc-service=2
+Test with fewer processes:
+
+CONTAINER_ID=$(docker ps --filter "name=hpc-stack_hpc-service" --format "{{.ID}}" | head -1)
+docker exec -it $CONTAINER_ID bash -c "
+cd /hpc &&
+mpirun -np 2 --allow-run-as-root python3 distributed_test.py
+"
+Task 5: Integrate with Cloud Platforms for Scalable Computing
+Subtask 5.1: Create Cloud-Ready HPC Images
+Create a production-ready Dockerfile:
+
+nano Dockerfile.cloud-hpc
+FROM ubuntu:22.04
+
+# Metadata
+LABEL maintainer="HPC Team"
+LABEL version="1.0"
+LABEL description="Cloud-ready HPC container with MPI support"
+
+# Environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV OMPI_ALLOW_RUN_AS_ROOT=1
+ENV OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+ENV PATH=/opt/hpc/bin:$PATH
+ENV LD_LIBRARY_PATH=/opt/hpc/lib:$LD_LIBRARY_PATH
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gfortran \
+    openmpi-bin \
+    openmpi-common \
+    libopenmpi-dev \
+    python3 \
+    python3-pip \
+    python3-dev \
+    openssh-server \
+    openssh-client \
+    curl \
+    wget \
+    git \
+    htop \
+    vim \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip3 install --no-cache-dir \
+    numpy \
+    scipy \
+    mpi4py \
+    matplotlib \
+    pandas \
+    scikit-learn
+
+# Create application directory
+RUN mkdir -p /opt/hpc/{bin,lib,share,apps}
+WORKDIR /opt/hpc/apps
+
+# Configure SSH for passwordless access
+RUN mkdir -p /root/.ssh && \
+    ssh-keygen -t rsa -f /root/.ssh/id_rsa -N '' && \
+    cat /root/.ssh/id_rsa.pub >> /root/.ssh/authorized_keys && \
+    chmod 600 /root/.ssh/authorized_keys && \
+    echo "StrictHostKeyChecking no" >> /root/.ssh/config
+
+# Create startup script
+RUN echo '#!/bin/bash\n\
+service ssh start\n\
+if [ "$1" = "master" ]; then\n\
+    echo "Starting as MPI master node"\n\
+    exec tail -f /dev/null\n\
+elif [ "$1" = "worker" ]; then\n\
+    echo "Starting as MPI worker node"\n\
+    exec tail -f /dev/null\n\
+else\n\
+    exec "$@"\n\
+fi' > /opt/hpc/bin/start-hpc.sh && \
+    chmod +x /opt/hpc/bin/start-hpc.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD pgrep sshd > /dev/null || exit 1
+
+ENTRYPOINT ["/opt/hpc/bin/start-hpc.sh"]
+CMD ["master"]
+Build the cloud-ready image:
+
+docker build -f Dockerfile.cloud-hpc -t cloud-hpc:latest .
+Subtask 5.2: Create Cloud Deployment Configuration
+Create a Kubernetes-style deployment configuration:
+
+nano k8s-hpc-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpc-master
+  labels:
+    app: hpc-cluster
+    role: master
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hpc-cluster
+      role: master
+  template:
+    metadata:
+      labels:
+        app: hpc-cluster
+        role: master
+    spec:
+      containers:
+      - name: hpc-master
+        image: cloud-hpc:latest
+        args: ["master"]
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        ports:
+        - containerPort: 22
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /shared
+      volumes:
+      - name: shared-storage
+        emptyDir: {}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hpc-workers
+  labels:
+    app: hpc-cluster
+    role: worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: hpc-cluster
+      role: worker
+  template:
+    metadata:
+      labels:
+        app: hpc-cluster
+        role: worker
+    spec:
+      containers:
+      - name: hpc-worker
+        image: cloud-hpc:latest
+        args: ["worker"]
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        ports:
+        - containerPort: 22
+        volumeMounts:
+        - name: shared-storage
+          mountPath: /shared
+      volumes:
+      - name: shared-storage
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hpc-master-service
+spec:
+  selector:
+    app: hpc-cluster
+    role: master
+  ports:
+  - port: 22
+    targetPort: 22
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hpc-workers-service
+spec:
+  selector:
+    app: hpc-cluster
+    role: worker
+  ports:
+  - port: 22
+    targetPort: 22
+  type: ClusterIP
+Subtask 5.3: Create Cloud Scaling Scripts
+Create an auto-scaling simulation script:
+
+nano cloud_scaling_simulator.py
+#!/usr/bin/env python3
+import subprocess
+import time
+import json
+import sys
+
+class CloudHPCManager:
+    def __init__(self):
+        self.current_workers = 0
+        self.max_workers = 10
+        self.min_workers = 1
+        
+    def get_current_load(self):
+        """Simulate getting current system load"""
+        try:
+            # Get CPU usage from containers
+            result = subprocess.run(['docker', 'stats', '--no-stream', '--format', 
+                                   'json'], capture_output=True, text=True)
+            if result.returncode == 0:
+                stats = []
+                for line in result.stdout.strip().split('\n'):
+                    if line:
+                        stats.append(json.loads(line))
+                
+                if stats:
+                    cpu_usage = sum(float(stat['CPUPerc'].rstrip('%')) for stat in stats) / len(stats)
+                    return cpu_usage
+            return 0.0
+        except Exception as e:
+            print(f"Error getting load: {e}")
+            return 0.0
+    
+    def scale_workers(self, target_count):
+        """Scale the number of worker containers"""
+        if target_count == self.current_workers:
+            return
+            
+        print(f"Scaling workers from {self.current_workers} to {target_count}")
+        
+        try:
+            # Use docker service scale (assuming swarm mode)
+            subprocess.run(['docker', 'service', 'scale', 
+                          f'hpc-stack_hpc-service={target_count + 1}'], 
+                          check=True)
+            self.current_workers = target_count
+            print(f"Successfully scaled to {target_count} workers")
+        except subprocess.CalledProcessError as e:
+            print(f"Error scaling workers: {e}")
+    
+    def auto_scale(self):
+        """Auto-scaling logic based on load"""
+        load = self.get_current_load()
+        print(f"Current average CPU load: {load:.2f}%")
+        
+        if load > 80 and self.current_workers < self.max_workers:
+            # Scale up
+            new_count = min(self.current_workers + 2, self.max_workers)
+            self.scale_workers(new_count)
+        elif load < 20 and self.current_workers > self.min_workers:
+            # Scale down
+            new_count = max(self.current_workers - 1, self.min_workers)
+            self.scale_workers(new_count)
+    
+    def monitor_and_scale(self, duration=300):
+        """Monitor system and auto-scale for specified duration"""
+        print(f"Starting auto-scaling monitor for {duration} seconds")
+        start_time = time.time()
+        
+        while time.time() - start_time < duration:
+            self.auto_scale()
+            time.sleep(30)  # Check every 30 seconds
+        
+        print("Auto-scaling monitor stopped")
+
+if __name__ == "__main__":
+    manager = CloudHPCManager()
+    
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "scale":
+            target = int(sys.argv[2]) if len(sys.argv) > 2 else 3
+            manager.scale_workers(target)
+        elif sys.argv[1] == "monitor":
+            duration = int(sys.argv[2]) if len(sys.argv) > 2 else 300
+            manager.monitor_and_scale(duration)
+        elif sys.argv[1] == "status":
+            load = manager.get_current_load()
+            print(f"Current load: {load:.2f}%")
+            print(f"Current workers: {manager.current_workers}")
+    else:
+        print("Usage:")
+        print("  python3 cloud_scaling_simulator.py scale [count]")
+        print("  python3 cloud_scaling_simulator.py monitor [duration]")
+        print("  python3 cloud_scaling_simulator.py status")
+Make the script executable:
+
+chmod +x cloud_scaling_simulator.py
+Subtask 5.4: Test Cloud Integration Features
+Test the scaling simulator:
+
+# Check current status
+python3 cloud_scaling_simulator.py status
+
+# Scale to 4 workers
+python3 cloud_scaling_simulator.
