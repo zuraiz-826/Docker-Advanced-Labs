@@ -1,0 +1,494 @@
+Lab 31: Docker and Kubernetes - Integrating Docker with Kubernetes
+Objectives
+By the end of this lab, students will be able to:
+
+Set up a local Kubernetes cluster using Minikube
+Build and containerize a simple web application using Docker
+Push Docker images to Docker Hub container registry
+Deploy containerized applications to Kubernetes using pods
+Create and configure Kubernetes services to expose applications
+Access deployed applications externally through Kubernetes services
+Understand the integration workflow between Docker and Kubernetes
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of containerization concepts
+Familiarity with command-line interface operations
+Basic knowledge of web applications and networking
+Understanding of YAML file structure
+Docker fundamentals (images, containers, Dockerfile)
+Required Tools
+The following tools will be pre-installed on your Al Nafi cloud machine:
+
+Docker Engine
+kubectl (Kubernetes command-line tool)
+Minikube (local Kubernetes cluster)
+Git
+Text editor (nano/vim)
+curl
+Lab Environment Setup
+Al Nafi Cloud Machine Access: Simply click Start Lab to access your pre-configured Linux-based cloud machine. All necessary tools are already installed and ready to use.
+
+Task 1: Set up a Kubernetes Cluster using Minikube
+Subtask 1.1: Start Minikube
+First, let's start our local Kubernetes cluster using Minikube.
+
+# Start Minikube with Docker driver
+minikube start --driver=docker
+
+# Verify Minikube status
+minikube status
+Subtask 1.2: Verify Kubernetes Cluster
+Check if your Kubernetes cluster is running properly.
+
+# Check cluster information
+kubectl cluster-info
+
+# View cluster nodes
+kubectl get nodes
+
+# Check if all system pods are running
+kubectl get pods -n kube-system
+Expected Output: You should see your Minikube node in "Ready" status and all system pods in "Running" state.
+
+Subtask 1.3: Configure Docker Environment
+Configure your shell to use Minikube's Docker daemon.
+
+# Configure Docker to use Minikube's Docker daemon
+eval $(minikube docker-env)
+
+# Verify Docker is working with Minikube
+docker ps
+Task 2: Build a Docker Image for a Simple Web App
+Subtask 2.1: Create Application Directory
+Create a directory structure for our web application.
+
+# Create project directory
+mkdir ~/webapp-k8s
+cd ~/webapp-k8s
+
+# Create application files directory
+mkdir app
+Subtask 2.2: Create a Simple Web Application
+Create a simple Python Flask web application.
+
+# Create the main application file
+cat > app/app.py << 'EOF'
+from flask import Flask
+import os
+import socket
+
+app = Flask(__name__)
+
+@app.route('/')
+def hello():
+    hostname = socket.gethostname()
+    return f'''
+    <html>
+        <head><title>Docker + Kubernetes Demo</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; margin-top: 50px;">
+            <h1 style="color: #2196F3;">Welcome to Docker + Kubernetes Integration!</h1>
+            <h2 style="color: #4CAF50;">Container Hostname: {hostname}</h2>
+            <p>This application is running in a Docker container managed by Kubernetes.</p>
+            <p style="color: #666;">Lab 31: Docker and Kubernetes Integration</p>
+        </body>
+    </html>
+    '''
+
+@app.route('/health')
+def health():
+    return {'status': 'healthy', 'hostname': socket.gethostname()}
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
+EOF
+Subtask 2.3: Create Requirements File
+Create a requirements file for Python dependencies.
+
+# Create requirements.txt
+cat > app/requirements.txt << 'EOF'
+Flask==2.3.3
+Werkzeug==2.3.7
+EOF
+Subtask 2.4: Create Dockerfile
+Create a Dockerfile to containerize the application.
+
+# Create Dockerfile
+cat > Dockerfile << 'EOF'
+# Use official Python runtime as base image
+FROM python:3.9-slim
+
+# Set working directory in container
+WORKDIR /app
+
+# Copy requirements file
+COPY app/requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY app/ .
+
+# Expose port 5000
+EXPOSE 5000
+
+# Set environment variables
+ENV FLASK_APP=app.py
+ENV FLASK_RUN_HOST=0.0.0.0
+
+# Run the application
+CMD ["python", "app.py"]
+EOF
+Subtask 2.5: Build Docker Image
+Build the Docker image for our web application.
+
+# Build Docker image
+docker build -t webapp-k8s:v1.0 .
+
+# Verify image was created
+docker images | grep webapp-k8s
+
+# Test the image locally (optional)
+docker run -d -p 8080:5000 --name test-webapp webapp-k8s:v1.0
+
+# Test the application
+curl http://localhost:8080
+
+# Stop and remove test container
+docker stop test-webapp
+docker rm test-webapp
+Task 3: Push the Docker Image to Container Registry
+Subtask 3.1: Create Docker Hub Account and Login
+Note: You'll need a Docker Hub account for this step. If you don't have one, create it at https://hub.docker.com
+
+# Login to Docker Hub
+docker login
+
+# Enter your Docker Hub username and password when prompted
+Subtask 3.2: Tag Image for Docker Hub
+Tag your image with your Docker Hub username.
+
+# Replace 'yourusername' with your actual Docker Hub username
+export DOCKER_USERNAME=yourusername
+
+# Tag the image for Docker Hub
+docker tag webapp-k8s:v1.0 $DOCKER_USERNAME/webapp-k8s:v1.0
+
+# Verify the tag
+docker images | grep webapp-k8s
+Subtask 3.3: Push Image to Docker Hub
+Push the tagged image to Docker Hub.
+
+# Push image to Docker Hub
+docker push $DOCKER_USERNAME/webapp-k8s:v1.0
+
+# Verify push was successful
+echo "Image pushed successfully to Docker Hub!"
+Alternative for Lab Environment: If you don't want to use Docker Hub, you can use Minikube's local registry:
+
+# Enable Minikube registry addon
+minikube addons enable registry
+
+# Tag image for local registry
+docker tag webapp-k8s:v1.0 localhost:5000/webapp-k8s:v1.0
+
+# Push to local registry
+docker push localhost:5000/webapp-k8s:v1.0
+Task 4: Deploy the Image to Kubernetes using a Pod
+Subtask 4.1: Create Pod Configuration
+Create a YAML file to define our Kubernetes pod.
+
+# Create pod configuration file
+cat > webapp-pod.yaml << EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webapp-pod
+  labels:
+    app: webapp
+    version: v1.0
+spec:
+  containers:
+  - name: webapp-container
+    image: $DOCKER_USERNAME/webapp-k8s:v1.0
+    ports:
+    - containerPort: 5000
+      name: http
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "250m"
+      limits:
+        memory: "128Mi"
+        cpu: "500m"
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 5000
+      initialDelaySeconds: 30
+      periodSeconds: 10
+    readinessProbe:
+      httpGet:
+        path: /health
+        port: 5000
+      initialDelaySeconds: 5
+      periodSeconds: 5
+EOF
+For Local Registry Users: If using Minikube's local registry, modify the image line:
+
+# For local registry users, create alternative pod config
+cat > webapp-pod-local.yaml << 'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webapp-pod
+  labels:
+    app: webapp
+    version: v1.0
+spec:
+  containers:
+  - name: webapp-container
+    image: localhost:5000/webapp-k8s:v1.0
+    ports:
+    - containerPort: 5000
+      name: http
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "250m"
+      limits:
+        memory: "128Mi"
+        cpu: "500m"
+EOF
+Subtask 4.2: Deploy Pod to Kubernetes
+Deploy the pod to your Kubernetes cluster.
+
+# Apply pod configuration
+kubectl apply -f webapp-pod.yaml
+
+# Verify pod creation
+kubectl get pods
+
+# Check pod details
+kubectl describe pod webapp-pod
+
+# View pod logs
+kubectl logs webapp-pod
+Subtask 4.3: Verify Pod is Running
+Wait for the pod to be in "Running" status and verify it's working.
+
+# Wait for pod to be ready
+kubectl wait --for=condition=Ready pod/webapp-pod --timeout=60s
+
+# Check pod status
+kubectl get pod webapp-pod -o wide
+
+# Test application inside the pod
+kubectl exec webapp-pod -- curl http://localhost:5000/health
+Task 5: Expose the Kubernetes Service and Access it Externally
+Subtask 5.1: Create Service Configuration
+Create a Kubernetes service to expose our pod.
+
+# Create service configuration file
+cat > webapp-service.yaml << 'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp-service
+  labels:
+    app: webapp
+spec:
+  type: NodePort
+  selector:
+    app: webapp
+  ports:
+  - port: 80
+    targetPort: 5000
+    nodePort: 30080
+    protocol: TCP
+    name: http
+EOF
+Subtask 5.2: Deploy Service to Kubernetes
+Deploy the service to expose our application.
+
+# Apply service configuration
+kubectl apply -f webapp-service.yaml
+
+# Verify service creation
+kubectl get services
+
+# Check service details
+kubectl describe service webapp-service
+Subtask 5.3: Access Application Externally
+Access the application through the Kubernetes service.
+
+# Get Minikube IP
+minikube ip
+
+# Get service URL
+minikube service webapp-service --url
+
+# Test the application
+curl $(minikube service webapp-service --url)
+
+# Open in browser (if GUI available)
+minikube service webapp-service
+Subtask 5.4: Alternative Access Methods
+Explore different ways to access your application.
+
+# Port forwarding method
+kubectl port-forward pod/webapp-pod 8080:5000 &
+
+# Test with port forwarding
+curl http://localhost:8080
+
+# Stop port forwarding
+pkill -f "kubectl port-forward"
+
+# Using kubectl proxy
+kubectl proxy --port=8001 &
+
+# Access through proxy
+curl http://localhost:8001/api/v1/namespaces/default/pods/webapp-pod:5000/proxy/
+
+# Stop proxy
+pkill -f "kubectl proxy"
+Verification and Testing
+Complete Application Test
+Perform a comprehensive test of your deployed application.
+
+# Test all endpoints
+echo "Testing main endpoint:"
+curl $(minikube service webapp-service --url)
+
+echo -e "\n\nTesting health endpoint:"
+curl $(minikube service webapp-service --url)/health
+
+# Check resource usage
+kubectl top pod webapp-pod
+
+# View application logs
+kubectl logs webapp-pod --tail=20
+Scaling Test (Bonus)
+Learn how to scale your application using deployments.
+
+# Create deployment configuration
+cat > webapp-deployment.yaml << EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webapp-deployment
+  labels:
+    app: webapp
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: webapp
+  template:
+    metadata:
+      labels:
+        app: webapp
+    spec:
+      containers:
+      - name: webapp-container
+        image: $DOCKER_USERNAME/webapp-k8s:v1.0
+        ports:
+        - containerPort: 5000
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "250m"
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+EOF
+
+# Deploy the deployment
+kubectl apply -f webapp-deployment.yaml
+
+# Check deployment status
+kubectl get deployments
+kubectl get pods -l app=webapp
+
+# Test load balancing
+for i in {1..10}; do
+  curl -s $(minikube service webapp-service --url) | grep "Container Hostname"
+done
+Troubleshooting Common Issues
+Issue 1: Pod Not Starting
+# Check pod events
+kubectl describe pod webapp-pod
+
+# Check pod logs
+kubectl logs webapp-pod
+
+# Common solutions:
+# - Verify image name and tag
+# - Check if image exists in registry
+# - Verify resource limits
+Issue 2: Service Not Accessible
+# Verify service endpoints
+kubectl get endpoints webapp-service
+
+# Check if pod labels match service selector
+kubectl get pod webapp-pod --show-labels
+
+# Verify port configuration
+kubectl describe service webapp-service
+Issue 3: Image Pull Errors
+# For Docker Hub authentication issues
+kubectl create secret docker-registry regcred \
+  --docker-server=https://index.docker.io/v1/ \
+  --docker-username=$DOCKER_USERNAME \
+  --docker-password=your-password \
+  --docker-email=your-email
+
+# Update pod to use secret
+kubectl patch pod webapp-pod -p '{"spec":{"imagePullSecrets":[{"name":"regcred"}]}}'
+Cleanup
+Clean up resources after completing the lab.
+
+# Delete service
+kubectl delete service webapp-service
+
+# Delete pod
+kubectl delete pod webapp-pod
+
+# Delete deployment (if created)
+kubectl delete deployment webapp-deployment
+
+# Remove local files
+cd ~
+rm -rf webapp-k8s
+
+# Stop Minikube (optional)
+minikube stop
+Conclusion
+Congratulations! You have successfully completed Lab 31: Docker and Kubernetes Integration. In this lab, you accomplished the following:
+
+Key Achievements
+Kubernetes Cluster Setup: Successfully deployed a local Kubernetes cluster using Minikube, providing a foundation for container orchestration
+Application Containerization: Built a Docker image for a Python Flask web application, demonstrating the containerization process
+Container Registry Integration: Pushed your Docker image to Docker Hub, enabling image sharing and distribution
+Kubernetes Deployment: Deployed your containerized application to Kubernetes using pods, showcasing container orchestration
+Service Exposure: Created and configured Kubernetes services to make your application accessible externally
+End-to-End Integration: Demonstrated the complete workflow from Docker image creation to Kubernetes deployment
+Why This Matters
+This integration between Docker and Kubernetes is fundamental to modern DevOps and cloud-native application development:
+
+Scalability: Kubernetes can automatically scale your Docker containers based on demand
+High Availability: Kubernetes ensures your applications remain available even if individual containers fail
+Resource Management: Efficient resource allocation and management across your infrastructure
+Production Readiness: This workflow is used by organizations worldwide for production deployments
+Career Relevance: These skills are essential for Docker Certified Associate (DCA) certification and modern DevOps roles
+Next Steps
+To further enhance your skills:
+
+Explore Kubernetes deployments and replica sets for better application management
+Learn about Kubernetes ingress controllers for advanced routing
+Study Kubernetes persistent volumes for stateful applications
+Practice with Helm charts for package management
+Investigate monitoring and logging solutions for Kubernetes clusters
+You now have hands-on experience with the core technologies that power modern containerized applications in production environments!
