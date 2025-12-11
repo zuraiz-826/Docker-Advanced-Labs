@@ -1,0 +1,297 @@
+Lab 56: Docker and Cloud - Running Docker Containers on IBM Cloud
+Lab Objectives
+By the end of this lab, you will be able to:
+
+• Set up and configure IBM Cloud account with necessary CLI tools • Create and manage a Kubernetes cluster on IBM Cloud Kubernetes Service (IKS) • Build Docker images and push them to IBM Container Registry • Deploy containerized applications to Kubernetes clusters using kubectl • Expose applications externally using Load Balancer services • Understand the integration between Docker containers and cloud-native platforms
+
+Prerequisites
+Before starting this lab, you should have:
+
+• Basic understanding of Docker containers and containerization concepts • Familiarity with command-line interface operations • Basic knowledge of Kubernetes concepts (pods, services, deployments) • Understanding of cloud computing fundamentals • A valid email address for IBM Cloud account registration
+
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your dedicated environment. No need to build or configure your own virtual machine - everything is ready to use!
+
+Your cloud machine includes: • Ubuntu 20.04 LTS with Docker pre-installed • kubectl command-line tool • curl and other essential networking tools • Text editors (nano, vim)
+
+Task 1: Set up IBM Cloud Account and Install IBM Cloud CLI
+Subtask 1.1: Create IBM Cloud Account
+Open your web browser and navigate to IBM Cloud registration page
+Click on Create an IBM Cloud account
+Fill in the required information: • Email address • First and Last name • Country/Region (select United States) • Password (must meet security requirements)
+Verify your email address by clicking the link sent to your inbox
+Complete the account setup process
+Subtask 1.2: Install IBM Cloud CLI
+Open terminal in your cloud machine
+Download and install the IBM Cloud CLI:
+curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
+Verify the installation:
+ibmcloud version
+Install the Kubernetes service plugin:
+ibmcloud plugin install kubernetes-service
+Install the Container Registry plugin:
+ibmcloud plugin install container-registry
+Verify all plugins are installed:
+ibmcloud plugin list
+Subtask 1.3: Login to IBM Cloud
+Login to your IBM Cloud account via CLI:
+ibmcloud login
+When prompted, enter your IBM Cloud credentials
+Select your target region (choose us-south for this lab)
+Verify your login status:
+ibmcloud target
+Task 2: Create a Kubernetes Cluster in IBM Cloud
+Subtask 2.1: Set Resource Group
+List available resource groups:
+ibmcloud resource groups
+Target the default resource group:
+ibmcloud target -g default
+Subtask 2.2: Create Free Kubernetes Cluster
+Create a free Kubernetes cluster (this may take 15-20 minutes):
+ibmcloud ks cluster create classic --name my-docker-cluster --location dal10 --machine-type free --workers 1
+Check the cluster creation status:
+ibmcloud ks clusters
+Wait for the cluster state to show normal. You can check status periodically:
+ibmcloud ks cluster get --cluster my-docker-cluster
+Subtask 2.3: Configure kubectl
+Once the cluster is ready, configure kubectl to connect to your cluster:
+ibmcloud ks cluster config --cluster my-docker-cluster
+Verify kubectl connection:
+kubectl get nodes
+Check cluster information:
+kubectl cluster-info
+Task 3: Build a Docker Image and Push it to IBM Container Registry
+Subtask 3.1: Create a Sample Application
+Create a new directory for your application:
+mkdir ~/docker-app
+cd ~/docker-app
+Create a simple Node.js application file:
+nano app.js
+Add the following content to app.js:
+const express = require('express');
+const app = express();
+const port = 3000;
+
+app.get('/', (req, res) => {
+  res.send(`
+    <h1>Hello from Docker on IBM Cloud!</h1>
+    <p>This application is running in a Docker container on IBM Cloud Kubernetes Service.</p>
+    <p>Container ID: ${require('os').hostname()}</p>
+    <p>Timestamp: ${new Date().toISOString()}</p>
+  `);
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+});
+
+app.listen(port, '0.0.0.0', () => {
+  console.log(`App listening at http://0.0.0.0:${port}`);
+});
+Create a package.json file:
+nano package.json
+Add the following content:
+{
+  "name": "docker-cloud-app",
+  "version": "1.0.0",
+  "description": "Sample app for Docker on IBM Cloud",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
+Subtask 3.2: Create Dockerfile
+Create a Dockerfile:
+nano Dockerfile
+Add the following content:
+# Use official Node.js runtime as base image
+FROM node:18-alpine
+
+# Set working directory in container
+WORKDIR /usr/src/app
+
+# Copy package.json and package-lock.json
+COPY package*.json ./
+
+# Install dependencies
+RUN npm install
+
+# Copy application code
+COPY . .
+
+# Expose port 3000
+EXPOSE 3000
+
+# Define health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:3000/health || exit 1
+
+# Start the application
+CMD ["npm", "start"]
+Subtask 3.3: Set up IBM Container Registry
+Target the Container Registry region:
+ibmcloud cr region-set us-south
+Create a namespace in the registry (replace your-namespace with a unique name):
+ibmcloud cr namespace-add your-namespace-$(date +%s)
+List your namespaces to confirm creation:
+ibmcloud cr namespaces
+Note your namespace name for the next steps.
+Subtask 3.4: Build and Push Docker Image
+Build the Docker image locally:
+docker build -t docker-cloud-app:v1.0 .
+Verify the image was built:
+docker images
+Tag the image for IBM Container Registry (replace your-namespace with your actual namespace):
+docker tag docker-cloud-app:v1.0 us.icr.io/your-namespace/docker-cloud-app:v1.0
+Login to IBM Container Registry:
+ibmcloud cr login
+Push the image to the registry:
+docker push us.icr.io/your-namespace/docker-cloud-app:v1.0
+Verify the image is in the registry:
+ibmcloud cr images
+Task 4: Deploy the Docker Image to the Kubernetes Cluster
+Subtask 4.1: Create Kubernetes Deployment
+Create a deployment YAML file:
+nano deployment.yaml
+Add the following content (replace your-namespace with your actual namespace):
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docker-cloud-app
+  labels:
+    app: docker-cloud-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: docker-cloud-app
+  template:
+    metadata:
+      labels:
+        app: docker-cloud-app
+    spec:
+      containers:
+      - name: docker-cloud-app
+        image: us.icr.io/your-namespace/docker-cloud-app:v1.0
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+Subtask 4.2: Deploy the Application
+Apply the deployment:
+kubectl apply -f deployment.yaml
+Check the deployment status:
+kubectl get deployments
+Check the pods:
+kubectl get pods
+Wait for all pods to be in Running status. You can watch the status:
+kubectl get pods -w
+Check pod details:
+kubectl describe pods
+Task 5: Expose the Application Externally Using a Load Balancer
+Subtask 5.1: Create a Service
+Create a service YAML file:
+nano service.yaml
+Add the following content:
+apiVersion: v1
+kind: Service
+metadata:
+  name: docker-cloud-app-service
+  labels:
+    app: docker-cloud-app
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 3000
+    protocol: TCP
+  selector:
+    app: docker-cloud-app
+Subtask 5.2: Deploy the Service
+Apply the service:
+kubectl apply -f service.yaml
+Check the service status:
+kubectl get services
+Wait for the external IP to be assigned (this may take a few minutes):
+kubectl get services -w
+Subtask 5.3: Test the Application
+Once you have an external IP, test the application:
+# Replace EXTERNAL-IP with the actual IP from the previous command
+curl http://EXTERNAL-IP
+You can also test the health endpoint:
+curl http://EXTERNAL-IP/health
+Open a web browser and navigate to the external IP to see your application running.
+Subtask 5.4: Monitor and Verify Deployment
+Check the logs of your application:
+kubectl logs -l app=docker-cloud-app
+Get detailed information about your service:
+kubectl describe service docker-cloud-app-service
+Check the endpoints:
+kubectl get endpoints
+Troubleshooting Tips
+Common Issues and Solutions
+Issue 1: Cluster creation fails • Solution: Ensure you have sufficient quota in your IBM Cloud account • Try creating the cluster in a different location
+
+Issue 2: Image push fails • Solution: Verify you're logged into Container Registry with ibmcloud cr login • Check that your namespace exists with ibmcloud cr namespaces
+
+Issue 3: Pods stuck in Pending state • Solution: Check node resources with kubectl describe nodes • Verify image pull secrets are configured correctly
+
+Issue 4: External IP not assigned • Solution: Free clusters may have limitations on LoadBalancer services • Consider using NodePort service type as an alternative
+
+Issue 5: Application not accessible • Solution: Check security groups and firewall rules • Verify the service is correctly selecting pods with kubectl get endpoints
+
+Additional Verification Commands
+Check cluster health:
+kubectl get componentstatuses
+View resource usage:
+kubectl top nodes
+kubectl top pods
+Check events for troubleshooting:
+kubectl get events --sort-by=.metadata.creationTimestamp
+Cleanup (Optional)
+If you want to clean up resources after the lab:
+
+Delete the service:
+kubectl delete service docker-cloud-app-service
+Delete the deployment:
+kubectl delete deployment docker-cloud-app
+Delete the cluster (this will take several minutes):
+ibmcloud ks cluster rm --cluster my-docker-cluster
+Remove images from Container Registry:
+ibmcloud cr image-rm us.icr.io/your-namespace/docker-cloud-app:v1.0
+Conclusion
+Congratulations! You have successfully completed Lab 56: Docker and Cloud - Running Docker Containers on IBM Cloud.
+
+What You Accomplished
+In this lab, you have:
+
+• Set up IBM Cloud environment - Created an IBM Cloud account and installed the necessary CLI tools to interact with IBM Cloud services • Created a Kubernetes cluster - Deployed a managed Kubernetes cluster using IBM Cloud Kubernetes Service, providing you with a scalable container orchestration platform • Built and pushed Docker images - Created a containerized Node.js application and pushed it to IBM Container Registry for secure storage and distribution • Deployed applications to Kubernetes - Used kubectl to deploy your containerized application to the Kubernetes cluster with proper resource management and health checks • Exposed applications externally - Configured a LoadBalancer service to make your application accessible from the internet
+
+Why This Matters
+This lab demonstrates the power of combining Docker containerization with cloud-native platforms like IBM Cloud Kubernetes Service. The skills you've learned are essential for:
+
+• Modern Application Deployment - Understanding how to deploy applications in cloud environments using industry-standard tools • Scalability and Reliability - Learning how Kubernetes manages application scaling and ensures high availability • DevOps Practices - Gaining hands-on experience with container registries, deployment pipelines, and infrastructure as code • Professional Development - Building skills that are highly valued in the job market and essential for Docker Certified Associate (DCA) certification
+
+The combination of Docker containers and Kubernetes on IBM Cloud provides a robust, scalable, and manageable platform for deploying modern applications. These technologies are widely used in enterprise environments and form the foundation of many cloud-native architectures.
+
+You now have practical experience with the complete container deployment lifecycle, from building images to exposing applications in production-ready cloud environments. This knowledge will serve as a strong foundation for more advanced cloud-native development and deployment scenarios.
