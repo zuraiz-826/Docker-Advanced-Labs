@@ -1,0 +1,618 @@
+Lab 77: Docker for Networking - Network Overlay in Docker Swarm
+Objectives
+By the end of this lab, you will be able to:
+
+Initialize a Docker Swarm cluster and understand its networking architecture
+Create and configure overlay networks for multi-node container communication
+Deploy multi-service applications that utilize overlay networking
+Configure DNS service discovery between containers in a Swarm environment
+Test and verify communication between containers across multiple nodes
+Use Docker network inspection tools to troubleshoot network configurations
+Understand the benefits and use cases of overlay networking in production environments
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Docker containers and images
+Familiarity with Docker Compose concepts
+Knowledge of basic networking concepts (IP addresses, ports, DNS)
+Experience with Linux command line operations
+Understanding of multi-node distributed systems concepts
+Technical Requirements:
+
+Docker Engine version 17.06 or higher
+Multiple Linux machines or VMs (minimum 2 nodes)
+Network connectivity between nodes
+Root or sudo access on all nodes
+Ready-to-Use Cloud Machines
+Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment. The machines come with:
+
+Docker Engine pre-installed and configured
+Multiple nodes ready for Swarm clustering
+All necessary networking tools and utilities
+Proper firewall configurations for Swarm communication
+No need to build your own VMs or install Docker manually!
+
+Lab Environment Setup
+Your lab environment consists of:
+
+Manager Node: Primary Swarm manager (node1)
+Worker Nodes: Two worker nodes (node2, node3)
+Network: All nodes connected via private network
+Task 1: Initialize Docker Swarm and Create an Overlay Network
+Subtask 1.1: Initialize Docker Swarm on Manager Node
+First, we'll set up the Swarm cluster by initializing the manager node.
+
+Connect to the manager node (node1)
+# Check Docker version and status
+docker --version
+docker info
+Initialize Docker Swarm
+# Initialize Swarm mode on manager node
+docker swarm init --advertise-addr <MANAGER_IP>
+
+# Example with actual IP
+docker swarm init --advertise-addr 192.168.1.10
+Expected Output:
+
+Swarm initialized: current node (xyz123) is now a manager.
+
+To add a worker to this swarm, run the following command:
+    docker swarm join --token SWMTKN-1-xxxxx 192.168.1.10:2377
+Verify Swarm initialization
+# Check Swarm status
+docker info | grep -A 10 "Swarm:"
+
+# List Swarm nodes
+docker node ls
+Subtask 1.2: Join Worker Nodes to the Swarm
+Get the join token from manager node
+# Get worker join token
+docker swarm join-token worker
+Connect to worker node (node2) and join the Swarm
+# Join as worker node (use the token from previous step)
+docker swarm join --token SWMTKN-1-xxxxx 192.168.1.10:2377
+Connect to worker node (node3) and join the Swarm
+# Join as worker node
+docker swarm join --token SWMTKN-1-xxxxx 192.168.1.10:2377
+Verify all nodes joined successfully (from manager node)
+# Check all nodes in the Swarm
+docker node ls
+Expected Output:
+
+ID                            HOSTNAME   STATUS    AVAILABILITY   MANAGER STATUS
+xyz123 *                      node1      Ready     Active         Leader
+abc456                        node2      Ready     Active         
+def789                        node3      Ready     Active         
+Subtask 1.3: Create Overlay Network
+Create a custom overlay network
+# Create overlay network for multi-service communication
+docker network create --driver overlay --attachable webapp-network
+
+# Create another overlay network with custom subnet
+docker network create \
+  --driver overlay \
+  --subnet=10.0.1.0/24 \
+  --gateway=10.0.1.1 \
+  --attachable \
+  backend-network
+List and inspect the created networks
+# List all networks
+docker network ls
+
+# Inspect the overlay network
+docker network inspect webapp-network
+Verify overlay network properties
+# Check network details
+docker network inspect webapp-network --format '{{json .IPAM.Config}}'
+docker network inspect webapp-network --format '{{.Driver}}'
+docker network inspect webapp-network --format '{{.Scope}}'
+Task 2: Deploy a Multi-Service Application Using the Overlay Network
+Subtask 2.1: Create Application Services
+We'll deploy a web application with multiple services: a web frontend, API backend, and database.
+
+Create a Docker Compose file for the application
+# Create application directory
+mkdir -p ~/swarm-app
+cd ~/swarm-app
+
+# Create docker-compose.yml
+cat > docker-compose.yml << 'EOF'
+version: '3.8'
+
+services:
+  web:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    networks:
+      - webapp-network
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          - node.role == worker
+    configs:
+      - source: nginx_config
+        target: /etc/nginx/nginx.conf
+    depends_on:
+      - api
+
+  api:
+    image: httpd:alpine
+    networks:
+      - webapp-network
+      - backend-network
+    deploy:
+      replicas: 3
+      placement:
+        max_replicas_per_node: 2
+    environment:
+      - SERVICE_NAME=api-service
+    depends_on:
+      - database
+
+  database:
+    image: postgres:13-alpine
+    networks:
+      - backend-network
+    environment:
+      - POSTGRES_DB=webapp
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=secret123
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+networks:
+  webapp-network:
+    external: true
+  backend-network:
+    external: true
+
+volumes:
+  db_data:
+
+configs:
+  nginx_config:
+    content: |
+      events {
+          worker_connections 1024;
+      }
+      http {
+          upstream api_backend {
+              server api:80;
+          }
+          server {
+              listen 80;
+              location / {
+                  proxy_pass http://api_backend;
+                  proxy_set_header Host $host;
+              }
+          }
+      }
+EOF
+Create the configuration for nginx
+# Create nginx configuration as Docker config
+docker config create nginx_config - << 'EOF'
+events {
+    worker_connections 1024;
+}
+http {
+    upstream api_backend {
+        server api:80;
+    }
+    server {
+        listen 80;
+        location / {
+            proxy_pass http://api_backend;
+            proxy_set_header Host $host;
+            add_header X-Backend-Server $upstream_addr;
+        }
+        location /health {
+            return 200 "OK\n";
+            add_header Content-Type text/plain;
+        }
+    }
+}
+EOF
+Subtask 2.2: Deploy the Application Stack
+Deploy the application as a Docker Stack
+# Deploy the stack
+docker stack deploy -c docker-compose.yml webapp-stack
+
+# Verify stack deployment
+docker stack ls
+Check service status
+# List all services in the stack
+docker stack services webapp-stack
+
+# Get detailed service information
+docker service ls
+Monitor service deployment
+# Watch service deployment progress
+watch docker service ls
+
+# Check specific service details
+docker service ps webapp-stack_web
+docker service ps webapp-stack_api
+docker service ps webapp-stack_database
+Subtask 2.3: Verify Service Distribution
+Check which nodes are running which services
+# See service distribution across nodes
+docker service ps webapp-stack_web --format "table {{.Node}}\t{{.CurrentState}}\t{{.Image}}"
+docker service ps webapp-stack_api --format "table {{.Node}}\t{{.CurrentState}}\t{{.Image}}"
+docker service ps webapp-stack_database --format "table {{.Node}}\t{{.CurrentState}}\t{{.Image}}"
+Verify containers are running on different nodes
+# From each node, check running containers
+docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+Task 3: Configure DNS Service Discovery Between Containers
+Subtask 3.1: Test Built-in DNS Resolution
+Docker Swarm provides automatic DNS service discovery for services within the same network.
+
+Test DNS resolution from web service to API service
+# Get container ID of web service
+WEB_CONTAINER=$(docker ps --filter "name=webapp-stack_web" --format "{{.ID}}" | head -1)
+
+# Test DNS resolution
+docker exec $WEB_CONTAINER nslookup api
+docker exec $WEB_CONTAINER ping -c 3 api
+Test DNS resolution from API service to database
+# Get container ID of API service
+API_CONTAINER=$(docker ps --filter "name=webapp-stack_api" --format "{{.ID}}" | head -1)
+
+# Test DNS resolution
+docker exec $API_CONTAINER nslookup database
+docker exec $API_CONTAINER ping -c 3 database
+Subtask 3.2: Verify Service Discovery Across Networks
+Check network connectivity between services
+# From API container, test both networks
+docker exec $API_CONTAINER ip route
+docker exec $API_CONTAINER cat /etc/resolv.conf
+Test service discovery using service names
+# Create a test container to verify DNS
+docker run --rm -it --network webapp-network alpine sh -c "
+  nslookup web &&
+  nslookup api &&
+  wget -qO- http://web/health
+"
+Subtask 3.3: Configure Custom DNS Settings
+Create a service with custom DNS configuration
+# Create a monitoring service with custom DNS
+cat > monitoring-service.yml << 'EOF'
+version: '3.8'
+
+services:
+  monitor:
+    image: alpine
+    command: sleep 3600
+    networks:
+      - webapp-network
+    deploy:
+      replicas: 1
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    dns_search:
+      - webapp.local
+    extra_hosts:
+      - "custom-api:10.0.1.100"
+
+networks:
+  webapp-network:
+    external: true
+EOF
+
+# Deploy monitoring service
+docker stack deploy -c monitoring-service.yml monitoring-stack
+Test custom DNS configuration
+# Get monitoring container
+MONITOR_CONTAINER=$(docker ps --filter "name=monitoring-stack_monitor" --format "{{.ID}}" | head -1)
+
+# Check DNS configuration
+docker exec $MONITOR_CONTAINER cat /etc/resolv.conf
+docker exec $MONITOR_CONTAINER cat /etc/hosts
+Task 4: Test Communication Between Containers Across Multiple Nodes
+Subtask 4.1: Verify Cross-Node Communication
+Identify container locations
+# Check which nodes are running which containers
+docker service ps webapp-stack_web --no-trunc
+docker service ps webapp-stack_api --no-trunc
+Test communication between containers on different nodes
+# From manager node, test web to API communication
+WEB_CONTAINER=$(docker ps --filter "name=webapp-stack_web" --format "{{.ID}}" | head -1)
+
+if [ ! -z "$WEB_CONTAINER" ]; then
+    echo "Testing from web container:"
+    docker exec $WEB_CONTAINER wget -qO- http://api:80/ || echo "Connection test"
+    docker exec $WEB_CONTAINER nc -zv api 80
+fi
+Test from worker nodes
+# SSH to worker node and test
+# (Run this on worker nodes)
+API_CONTAINER=$(docker ps --filter "name=webapp-stack_api" --format "{{.ID}}" | head -1)
+
+if [ ! -z "$API_CONTAINER" ]; then
+    echo "Testing from API container:"
+    docker exec $API_CONTAINER nc -zv database 5432
+    docker exec $API_CONTAINER ping -c 2 database
+fi
+Subtask 4.2: Load Balancing Test
+Test load balancing across API replicas
+# Create a test script to verify load balancing
+cat > test-loadbalancing.sh << 'EOF'
+#!/bin/bash
+
+echo "Testing load balancing across API replicas..."
+
+for i in {1..10}; do
+    echo "Request $i:"
+    docker run --rm --network webapp-network alpine wget -qO- http://api:80/ | head -1
+    sleep 1
+done
+EOF
+
+chmod +x test-loadbalancing.sh
+./test-loadbalancing.sh
+Monitor traffic distribution
+# Check logs from different API replicas
+docker service logs webapp-stack_api --tail 20
+Subtask 4.3: Test Network Isolation
+Verify network isolation between overlay networks
+# Try to access database from web service (should fail)
+WEB_CONTAINER=$(docker ps --filter "name=webapp-stack_web" --format "{{.ID}}" | head -1)
+
+echo "Testing network isolation (this should fail):"
+docker exec $WEB_CONTAINER nc -zv database 5432 2>&1 || echo "Network isolation working correctly"
+Test successful communication within allowed networks
+# API should be able to reach database
+API_CONTAINER=$(docker ps --filter "name=webapp-stack_api" --format "{{.ID}}" | head -1)
+
+echo "Testing allowed communication:"
+docker exec $API_CONTAINER nc -zv database 5432 && echo "Communication successful"
+Task 5: Use docker network inspect to Troubleshoot Network Configurations
+Subtask 5.1: Inspect Overlay Network Details
+Detailed network inspection
+# Inspect webapp-network
+docker network inspect webapp-network
+
+# Get specific information
+echo "Network Driver:"
+docker network inspect webapp-network --format '{{.Driver}}'
+
+echo "Network Scope:"
+docker network inspect webapp-network --format '{{.Scope}}'
+
+echo "Network Subnet:"
+docker network inspect webapp-network --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+Inspect backend network
+# Inspect backend-network
+docker network inspect backend-network --format '{{json .IPAM.Config}}' | jq '.'
+
+# Check attached containers
+docker network inspect backend-network --format '{{range $k,$v := .Containers}}{{$k}}: {{$v.Name}}{{"\n"}}{{end}}'
+Subtask 5.2: Troubleshoot Network Connectivity Issues
+Create a comprehensive network diagnostic script
+cat > network-diagnostics.sh << 'EOF'
+#!/bin/bash
+
+echo "=== Docker Swarm Network Diagnostics ==="
+echo
+
+echo "1. Swarm Status:"
+docker info | grep -A 5 "Swarm:"
+echo
+
+echo "2. Network List:"
+docker network ls
+echo
+
+echo "3. Service Status:"
+docker service ls
+echo
+
+echo "4. Webapp Network Details:"
+docker network inspect webapp-network --format '{{json .}}' | jq '{
+  Name: .Name,
+  Driver: .Driver,
+  Scope: .Scope,
+  Subnet: .IPAM.Config[0].Subnet,
+  Gateway: .IPAM.Config[0].Gateway,
+  AttachedContainers: [.Containers | to_entries[] | {Id: .key, Name: .value.Name, IP: .value.IPv4Address}]
+}'
+echo
+
+echo "5. Backend Network Details:"
+docker network inspect backend-network --format '{{json .}}' | jq '{
+  Name: .Name,
+  Driver: .Driver,
+  Scope: .Scope,
+  Subnet: .IPAM.Config[0].Subnet,
+  Gateway: .IPAM.Config[0].Gateway,
+  AttachedContainers: [.Containers | to_entries[] | {Id: .key, Name: .value.Name, IP: .value.IPv4Address}]
+}'
+echo
+
+echo "6. Service Endpoint Information:"
+for service in $(docker service ls --format '{{.Name}}'); do
+    echo "Service: $service"
+    docker service inspect $service --format '{{range .Endpoint.VirtualIPs}}Network: {{.NetworkID}} IP: {{.Addr}}{{"\n"}}{{end}}'
+    echo
+done
+
+echo "7. Node Network Status:"
+docker node ls --format 'table {{.Hostname}}\t{{.Status}}\t{{.Availability}}'
+EOF
+
+chmod +x network-diagnostics.sh
+./network-diagnostics.sh
+Test network connectivity with detailed output
+# Create connectivity test script
+cat > connectivity-test.sh << 'EOF'
+#!/bin/bash
+
+echo "=== Network Connectivity Tests ==="
+
+# Get container IDs
+WEB_CONTAINER=$(docker ps --filter "name=webapp-stack_web" --format "{{.ID}}" | head -1)
+API_CONTAINER=$(docker ps --filter "name=webapp-stack_api" --format "{{.ID}}" | head -1)
+
+if [ ! -z "$WEB_CONTAINER" ]; then
+    echo "Testing from Web Container:"
+    echo "- DNS Resolution for 'api':"
+    docker exec $WEB_CONTAINER nslookup api
+    echo "- Network connectivity to API:"
+    docker exec $WEB_CONTAINER nc -zv api 80
+    echo "- HTTP request to API:"
+    docker exec $WEB_CONTAINER wget -qO- http://api:80/ --timeout=5 || echo "HTTP request failed"
+    echo
+fi
+
+if [ ! -z "$API_CONTAINER" ]; then
+    echo "Testing from API Container:"
+    echo "- DNS Resolution for 'database':"
+    docker exec $API_CONTAINER nslookup database
+    echo "- Network connectivity to Database:"
+    docker exec $API_CONTAINER nc -zv database 5432
+    echo "- Network interfaces:"
+    docker exec $API_CONTAINER ip addr show
+    echo
+fi
+
+echo "=== End of Connectivity Tests ==="
+EOF
+
+chmod +x connectivity-test.sh
+./connectivity-test.sh
+Subtask 5.3: Advanced Network Troubleshooting
+Check overlay network encryption
+# Create encrypted overlay network
+docker network create --driver overlay --opt encrypted secure-network
+
+# Inspect encryption settings
+docker network inspect secure-network --format '{{.Options}}'
+Monitor network traffic
+# Install network monitoring tools in a container
+docker run -it --rm --network webapp-network --cap-add NET_ADMIN nicolaka/netshoot
+
+# Inside the netshoot container, you can run:
+# tcpdump -i eth0
+# ss -tulpn
+# iftop
+Check iptables rules (on each node)
+# View Docker-related iptables rules
+sudo iptables -t nat -L DOCKER
+sudo iptables -L DOCKER-USER
+sudo iptables -L DOCKER-ISOLATION-STAGE-1
+Subtask 5.4: Performance Testing
+Network performance test between nodes
+# Create performance test script
+cat > network-performance.sh << 'EOF'
+#!/bin/bash
+
+echo "=== Network Performance Tests ==="
+
+# Test bandwidth between services
+echo "Testing bandwidth from web to api service:"
+docker run --rm --network webapp-network alpine sh -c "
+    time wget -qO- http://api:80/ > /dev/null
+"
+
+echo "Testing latency:"
+WEB_CONTAINER=$(docker ps --filter "name=webapp-stack_web" --format "{{.ID}}" | head -1)
+if [ ! -z "$WEB_CONTAINER" ]; then
+    docker exec $WEB_CONTAINER ping -c 10 api | tail -1
+fi
+
+echo "=== End of Performance Tests ==="
+EOF
+
+chmod +x network-performance.sh
+./network-performance.sh
+Troubleshooting Common Issues
+Issue 1: Services Cannot Communicate
+Symptoms: Services cannot reach each other by name
+
+Solutions:
+
+# Check if services are on the same network
+docker service inspect <service-name> --format '{{.Spec.TaskTemplate.Networks}}'
+
+# Verify network exists and is attachable
+docker network ls | grep overlay
+docker network inspect <network-name> --format '{{.Attachable}}'
+
+# Restart services if needed
+docker service update --force <service-name>
+Issue 2: Overlay Network Not Working
+Symptoms: Containers cannot communicate across nodes
+
+Solutions:
+
+# Check Swarm status
+docker info | grep "Swarm: active"
+
+# Verify required ports are open (2377, 7946, 4789)
+sudo netstat -tulpn | grep -E "(2377|7946|4789)"
+
+# Check node connectivity
+docker node ls
+Issue 3: DNS Resolution Failures
+Symptoms: nslookup fails for service names
+
+Solutions:
+
+# Check embedded DNS server
+docker exec <container> cat /etc/resolv.conf
+
+# Verify service is running
+docker service ps <service-name>
+
+# Check network attachment
+docker network inspect <network-name>
+Cleanup
+When you're finished with the lab, clean up the resources:
+
+# Remove stacks
+docker stack rm webapp-stack
+docker stack rm monitoring-stack
+
+# Remove networks
+docker network rm webapp-network backend-network secure-network
+
+# Remove configs
+docker config rm nginx_config
+
+# Leave swarm (on worker nodes first)
+docker swarm leave
+
+# Leave swarm (on manager node)
+docker swarm leave --force
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Initialized a Docker Swarm cluster with multiple nodes, understanding the architecture of manager and worker nodes
+Created and configured overlay networks that enable secure communication between containers across multiple hosts
+Deployed a multi-service application using Docker Stack with services distributed across the Swarm cluster
+Implemented DNS service discovery allowing containers to communicate using service names rather than IP addresses
+Tested cross-node communication and verified load balancing capabilities of the overlay network
+Used network inspection tools to troubleshoot and monitor network configurations
+Why This Matters:
+
+Overlay networking in Docker Swarm is crucial for production containerized applications because it:
+
+Enables scalability: Applications can span multiple hosts seamlessly
+Provides security: Network traffic is encrypted and isolated
+Simplifies service discovery: Services can find each other using DNS names
+Supports load balancing: Traffic is automatically distributed across service replicas
+Facilitates maintenance: Services can be updated without breaking network connectivity
+Real-World Applications:
+
+Microservices architectures: Each service can run on optimal hardware while maintaining communication
+High-availability applications: Services can failover between nodes automatically
+Multi-tier applications: Frontend, backend, and database tiers can be properly isolated yet connected
+Container orchestration: Essential for managing large-scale containerized environments
+This knowledge prepares you for the Docker Certified Associate (DCA) certification and real-world container orchestration scenarios. The overlay networking concepts you've learned are fundamental to modern cloud-native application deployment and management.
