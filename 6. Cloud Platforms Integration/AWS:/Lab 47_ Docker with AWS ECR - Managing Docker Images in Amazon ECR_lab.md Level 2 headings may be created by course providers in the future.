@@ -1,0 +1,367 @@
+Lab 47: Docker with AWS ECR - Managing Docker Images in Amazon ECR
+Objectives
+By the end of this lab, you will be able to:
+
+Understand the fundamentals of Amazon Elastic Container Registry (ECR)
+Create and configure an ECR repository
+Authenticate Docker with ECR using AWS CLI
+Build, tag, and push Docker images to ECR
+Pull Docker images from ECR on different instances
+Configure automated vulnerability scanning for container images
+Implement basic ECR security and access management
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Docker concepts and commands
+Familiarity with AWS services and the AWS Management Console
+Basic knowledge of Linux command line operations
+Understanding of container concepts and containerization benefits
+AWS account with appropriate permissions for ECR and EC2 services
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own VM or configure additional infrastructure.
+
+Your lab environment includes:
+
+Primary EC2 instance with Docker and AWS CLI pre-installed
+Secondary EC2 instance for testing image pulls
+Appropriate IAM roles and permissions configured
+All necessary networking and security groups set up
+Task 1: Set up Amazon ECR and Create a Repository
+Subtask 1.1: Access AWS Management Console
+Open your web browser and navigate to the AWS Management Console
+Sign in using your provided AWS credentials
+Ensure you are in the correct AWS region (us-east-1 recommended for this lab)
+Subtask 1.2: Navigate to Amazon ECR
+In the AWS Management Console, search for ECR in the services search bar
+Click on Elastic Container Registry from the search results
+You will see the ECR dashboard with options to create repositories
+Subtask 1.3: Create Your First ECR Repository
+Click the Create repository button
+
+Configure the repository settings:
+
+Visibility settings: Select Private
+Repository name: Enter my-web-app
+Tag immutability: Leave as Mutable (default)
+Image scan settings: Enable Scan on push (we'll configure this further in Task 5)
+Encryption settings: Leave as AES-256 (default)
+Click Create repository
+
+Note the repository URI displayed (format: account-id.dkr.ecr.region.amazonaws.com/my-web-app)
+
+Subtask 1.4: Verify Repository Creation
+Confirm your repository appears in the ECR repositories list
+Click on the repository name to view its details
+Note the Push commands tab - we'll use these commands later
+Task 2: Authenticate Docker to ECR using AWS CLI
+Subtask 2.1: Connect to Your Primary EC2 Instance
+Access your primary EC2 instance terminal (provided in your lab environment)
+Verify Docker is installed and running:
+docker --version
+docker info
+Subtask 2.2: Configure AWS CLI
+Check if AWS CLI is configured:
+aws --version
+aws sts get-caller-identity
+If not configured, set up AWS CLI with your credentials:
+aws configure
+Enter your:
+
+AWS Access Key ID
+AWS Secret Access Key
+Default region (e.g., us-east-1)
+Default output format (json)
+Subtask 2.3: Authenticate Docker with ECR
+Get the authentication token and authenticate Docker to ECR:
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <your-account-id>.dkr.ecr.us-east-1.amazonaws.com
+Replace <your-account-id> with your actual AWS account ID.
+
+Verify successful authentication by checking for the success message:
+Login Succeeded
+Subtask 2.4: Test ECR Access
+List your ECR repositories to confirm access:
+aws ecr describe-repositories
+You should see your my-web-app repository in the output
+Task 3: Push a Docker Image to ECR
+Subtask 3.1: Create a Sample Web Application
+Create a project directory:
+mkdir ~/my-web-app
+cd ~/my-web-app
+Create a simple HTML file:
+cat > index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My ECR Web App</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
+        .container { max-width: 600px; margin: 0 auto; }
+        h1 { color: #232F3E; }
+        p { color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to My ECR Web Application</h1>
+        <p>This application is running from a Docker image stored in Amazon ECR!</p>
+        <p>Lab 47: Docker with AWS ECR</p>
+    </div>
+</body>
+</html>
+EOF
+Subtask 3.2: Create a Dockerfile
+Create a Dockerfile for the web application:
+cat > Dockerfile << 'EOF'
+# Use official nginx image as base
+FROM nginx:alpine
+
+# Copy our HTML file to nginx html directory
+COPY index.html /usr/share/nginx/html/
+
+# Expose port 80
+EXPOSE 80
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]
+EOF
+Subtask 3.3: Build the Docker Image
+Build the Docker image:
+docker build -t my-web-app .
+Verify the image was created:
+docker images | grep my-web-app
+Test the image locally (optional):
+docker run -d -p 8080:80 --name test-app my-web-app
+curl http://localhost:8080
+docker stop test-app
+docker rm test-app
+Subtask 3.4: Tag the Image for ECR
+Tag your image with the ECR repository URI:
+docker tag my-web-app:latest <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:latest
+Also create a version tag:
+docker tag my-web-app:latest <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:v1.0
+Verify the tags:
+docker images | grep my-web-app
+Subtask 3.5: Push the Image to ECR
+Push the latest tag:
+docker push <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:latest
+Push the version tag:
+docker push <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:v1.0
+Verify the push was successful by checking the AWS ECR console or using CLI:
+aws ecr list-images --repository-name my-web-app
+Task 4: Pull the Image from ECR on a Different EC2 Instance
+Subtask 4.1: Connect to Your Secondary EC2 Instance
+Access your secondary EC2 instance terminal (provided in your lab environment)
+Verify Docker is installed:
+docker --version
+Subtask 4.2: Configure AWS CLI on Secondary Instance
+Configure AWS CLI with the same credentials:
+aws configure
+Verify configuration:
+aws sts get-caller-identity
+Subtask 4.3: Authenticate Docker with ECR
+Authenticate Docker to ECR on this instance:
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <your-account-id>.dkr.ecr.us-east-1.amazonaws.com
+Subtask 4.4: Pull and Run the Image
+Pull the image from ECR:
+docker pull <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:latest
+Verify the image was pulled:
+docker images | grep my-web-app
+Run the container:
+docker run -d -p 80:80 --name my-ecr-app <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:latest
+Test the application:
+curl http://localhost
+Check container status:
+docker ps
+Subtask 4.5: Test Different Image Tags
+Pull the versioned image:
+docker pull <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:v1.0
+Compare image details:
+docker inspect <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:latest
+docker inspect <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:v1.0
+Task 5: Set up Automated Image Scanning for Vulnerabilities
+Subtask 5.1: Enable Image Scanning via AWS Console
+Return to the AWS ECR console
+Navigate to your my-web-app repository
+Click on the repository name to view details
+Go to the Image scanning tab
+Click Edit and ensure Scan on push is enabled
+Save the configuration
+Subtask 5.2: Configure Enhanced Scanning (Optional)
+In the ECR console, go to Private registry settings
+Click on Scanning configuration
+Enable Enhanced scanning for more comprehensive vulnerability detection
+Configure scanning rules:
+Scan frequency: Continuous scanning
+Scan filters: All repositories or specific repositories
+Subtask 5.3: Push a New Image to Trigger Scanning
+Return to your primary EC2 instance
+Make a small change to your application:
+cd ~/my-web-app
+cat > index.html << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>My ECR Web App - Updated</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; }
+        .container { max-width: 600px; margin: 0 auto; }
+        h1 { color: #232F3E; }
+        p { color: #666; }
+        .update { color: #FF9900; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to My ECR Web Application</h1>
+        <p>This application is running from a Docker image stored in Amazon ECR!</p>
+        <p class="update">Updated version with vulnerability scanning enabled!</p>
+        <p>Lab 47: Docker with AWS ECR</p>
+    </div>
+</body>
+</html>
+EOF
+Build and push the updated image:
+docker build -t my-web-app:v2.0 .
+docker tag my-web-app:v2.0 <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:v2.0
+docker push <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:v2.0
+Subtask 5.4: View Scanning Results
+In the ECR console, navigate to your repository
+Click on the Images tab
+Wait for the scan to complete (this may take a few minutes)
+View the scan results by clicking on the image digest
+Review any vulnerabilities found and their severity levels
+Subtask 5.5: Use CLI to Check Scan Results
+List images with scan status:
+aws ecr describe-images --repository-name my-web-app
+Get detailed scan results:
+aws ecr describe-image-scan-findings --repository-name my-web-app --image-id imageTag=v2.0
+Filter for high-severity vulnerabilities:
+aws ecr describe-image-scan-findings --repository-name my-web-app --image-id imageTag=v2.0 --query 'imageScanFindings.findings[?severity==`HIGH`]'
+Additional ECR Management Tasks
+Managing Repository Policies
+Create a repository policy for controlled access:
+cat > ecr-policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowPushPull",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::<your-account-id>:root"
+      },
+      "Action": [
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:PutImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload"
+      ]
+    }
+  ]
+}
+EOF
+Apply the policy:
+aws ecr set-repository-policy --repository-name my-web-app --policy-text file://ecr-policy.json
+Lifecycle Policies
+Create a lifecycle policy to manage image retention:
+cat > lifecycle-policy.json << 'EOF'
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep last 10 images",
+      "selection": {
+        "tagStatus": "any",
+        "countType": "imageCountMoreThan",
+        "countNumber": 10
+      },
+      "action": {
+        "type": "expire"
+      }
+    }
+  ]
+}
+EOF
+Apply the lifecycle policy:
+aws ecr put-lifecycle-policy --repository-name my-web-app --lifecycle-policy-text file://lifecycle-policy.json
+Troubleshooting Common Issues
+Authentication Issues
+Problem: Docker login fails with authentication error Solution:
+
+# Ensure AWS CLI is properly configured
+aws configure list
+# Re-authenticate with ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.us-east-1.amazonaws.com
+Push/Pull Issues
+Problem: Image push fails with "repository does not exist" error Solution:
+
+# Verify repository exists
+aws ecr describe-repositories --repository-names my-web-app
+# Check repository URI format
+aws ecr describe-repositories --repository-names my-web-app --query 'repositories[0].repositoryUri'
+Permission Issues
+Problem: Access denied when performing ECR operations Solution:
+
+# Check current IAM identity
+aws sts get-caller-identity
+# Verify ECR permissions
+aws iam list-attached-user-policies --user-name <your-username>
+Best Practices for ECR
+Security Best Practices
+Use Private Repositories: Always use private repositories for proprietary applications
+Enable Image Scanning: Always enable vulnerability scanning for production images
+Implement Least Privilege: Use IAM policies to grant minimal required permissions
+Use Image Tags Wisely: Implement consistent tagging strategies (semantic versioning)
+Operational Best Practices
+Lifecycle Policies: Implement lifecycle policies to manage storage costs
+Multi-Region Replication: Consider cross-region replication for disaster recovery
+Monitoring: Set up CloudWatch alarms for repository metrics
+Automation: Use CI/CD pipelines for automated image builds and pushes
+Cleanup
+Remove Local Docker Images
+# Remove local images
+docker rmi my-web-app:latest
+docker rmi my-web-app:v2.0
+docker rmi <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:latest
+docker rmi <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:v1.0
+docker rmi <your-account-id>.dkr.ecr.us-east-1.amazonaws.com/my-web-app:v2.0
+
+# Stop and remove containers
+docker stop my-ecr-app
+docker rm my-ecr-app
+Clean Up AWS Resources
+# Delete images from ECR repository
+aws ecr batch-delete-image --repository-name my-web-app --image-ids imageTag=latest
+aws ecr batch-delete-image --repository-name my-web-app --image-ids imageTag=v1.0
+aws ecr batch-delete-image --repository-name my-web-app --image-ids imageTag=v2.0
+
+# Delete the repository (optional)
+aws ecr delete-repository --repository-name my-web-app --force
+Conclusion
+Congratulations! You have successfully completed Lab 47: Docker with AWS ECR. In this comprehensive lab, you have accomplished the following:
+
+Key Achievements:
+
+ECR Repository Management: Created and configured a private ECR repository with proper settings for security and scanning
+Docker Authentication: Successfully authenticated Docker with ECR using AWS CLI across multiple instances
+Image Lifecycle Management: Built, tagged, pushed, and pulled Docker images using ECR as your container registry
+Cross-Instance Deployment: Demonstrated the portability of containerized applications by pulling and running images on different EC2 instances
+Security Implementation: Configured automated vulnerability scanning to identify potential security issues in your container images
+Best Practices: Learned industry-standard practices for container registry management, including lifecycle policies and access controls
+Why This Matters: Amazon ECR provides a secure, scalable, and reliable container registry service that integrates seamlessly with other AWS services. The skills you've developed in this lab are essential for:
+
+Production Container Deployments: ECR serves as the foundation for container-based applications in AWS
+DevOps Workflows: ECR integrates with CI/CD pipelines for automated application deployment
+Security Compliance: Automated vulnerability scanning helps maintain security standards in production environments
+Cost Optimization: Lifecycle policies and efficient image management reduce storage costs
+Multi-Environment Deployments: The ability to pull images across different instances enables consistent deployments
+Next Steps:
+
+Explore integration with Amazon ECS and EKS for container orchestration
+Implement automated CI/CD pipelines using AWS CodePipeline and CodeBuild
+Learn about ECR cross-region replication for disaster recovery scenarios
+Study advanced IAM policies for fine-grained access control
+This lab has provided you with practical, hands-on experience with Amazon ECR that directly applies to real-world container management scenarios. The knowledge gained here forms a solid foundation for pursuing Docker Certified Associate (DCA) certification and advancing your containerization expertise.
