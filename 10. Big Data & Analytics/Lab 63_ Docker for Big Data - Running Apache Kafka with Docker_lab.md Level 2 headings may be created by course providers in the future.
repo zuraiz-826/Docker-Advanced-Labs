@@ -1,0 +1,857 @@
+Lab 63: Docker for Big Data - Running Apache Kafka with Docker
+Lab Objectives
+By the end of this lab, you will be able to:
+
+• Deploy and manage Apache Kafka clusters using Docker containers • Configure Zookeeper and Kafka services with Docker Compose • Create and manage Kafka topics for message streaming • Implement producer and consumer applications within Docker containers • Use kafkacat for testing message production and consumption • Monitor Kafka cluster health and performance metrics • Build a simple stream processing application using Docker • Understand the fundamentals of containerized big data processing
+
+Prerequisites
+Before starting this lab, you should have:
+
+• Basic understanding of Docker concepts and commands • Familiarity with command-line interface operations • Basic knowledge of distributed systems concepts • Understanding of message queuing systems • Access to a Linux-based system with Docker installed
+
+Note: Al Nafi provides ready-to-use Linux-based cloud machines with Docker pre-installed. Simply click "Start Lab" to begin - no need to build your own virtual machine.
+
+Lab Environment Setup
+Your Al Nafi cloud machine comes pre-configured with: • Docker Engine (latest stable version) • Docker Compose • Text editors (nano, vim) • Network tools for testing connectivity
+
+Task 1: Create Docker Containers for Kafka and Zookeeper using Docker Compose
+Subtask 1.1: Create Project Directory Structure
+First, let's create a proper directory structure for our Kafka Docker project.
+
+# Create main project directory
+mkdir kafka-docker-lab
+cd kafka-docker-lab
+
+# Create subdirectories for organization
+mkdir -p config data logs scripts
+Subtask 1.2: Create Docker Compose Configuration
+Create a comprehensive Docker Compose file that defines both Zookeeper and Kafka services.
+
+# Create the docker-compose.yml file
+nano docker-compose.yml
+Add the following configuration:
+
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    hostname: zookeeper
+    container_name: kafka-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - kafka-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    hostname: kafka
+    container_name: kafka-broker
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - kafka-network
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - kafka-network
+
+volumes:
+  zookeeper-data:
+  zookeeper-logs:
+  kafka-data:
+
+networks:
+  kafka-network:
+    driver: bridge
+Subtask 1.3: Start the Kafka Cluster
+Launch the entire Kafka ecosystem using Docker Compose.
+
+# Start all services in detached mode
+docker-compose up -d
+
+# Verify all containers are running
+docker-compose ps
+
+# Check container logs
+docker-compose logs kafka
+docker-compose logs zookeeper
+Subtask 1.4: Verify Kafka Installation
+Test that Kafka is properly running and accessible.
+
+# Check if Kafka is listening on the correct port
+docker exec kafka-broker kafka-topics --bootstrap-server localhost:9092 --list
+
+# Create a test topic to verify functionality
+docker exec kafka-broker kafka-topics --create --topic test-topic --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
+
+# List topics to confirm creation
+docker exec kafka-broker kafka-topics --bootstrap-server localhost:9092 --list
+Task 2: Set up Producer and Consumer Applications inside Docker Containers
+Subtask 2.1: Create a Python Producer Application
+Create a Python-based producer application that will run in its own Docker container.
+
+# Create producer directory and files
+mkdir producer
+cd producer
+
+# Create Python producer script
+nano producer.py
+Add the following Python code:
+
+#!/usr/bin/env python3
+
+import json
+import time
+import random
+from kafka import KafkaProducer
+from datetime import datetime
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class DataProducer:
+    def __init__(self, bootstrap_servers=['kafka:29092']):
+        self.producer = KafkaProducer(
+            bootstrap_servers=bootstrap_servers,
+            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+            key_serializer=lambda k: k.encode('utf-8') if k else None
+        )
+        
+    def generate_sample_data(self):
+        """Generate sample IoT sensor data"""
+        return {
+            'sensor_id': f'sensor_{random.randint(1, 100)}',
+            'temperature': round(random.uniform(15.0, 35.0), 2),
+            'humidity': round(random.uniform(30.0, 90.0), 2),
+            'timestamp': datetime.now().isoformat(),
+            'location': random.choice(['warehouse_a', 'warehouse_b', 'warehouse_c'])
+        }
+    
+    def send_messages(self, topic='sensor-data', num_messages=100):
+        """Send messages to Kafka topic"""
+        try:
+            for i in range(num_messages):
+                data = self.generate_sample_data()
+                key = data['sensor_id']
+                
+                # Send message
+                future = self.producer.send(topic, key=key, value=data)
+                
+                # Wait for message to be sent
+                record_metadata = future.get(timeout=10)
+                
+                logger.info(f"Message {i+1} sent to {record_metadata.topic} "
+                           f"partition {record_metadata.partition} "
+                           f"offset {record_metadata.offset}")
+                
+                time.sleep(1)  # Send one message per second
+                
+        except Exception as e:
+            logger.error(f"Error sending message: {e}")
+        finally:
+            self.producer.close()
+
+if __name__ == "__main__":
+    producer = DataProducer()
+    producer.send_messages()
+Create a Dockerfile for the producer:
+
+nano Dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install required packages
+RUN pip install kafka-python
+
+# Copy application code
+COPY producer.py .
+
+# Run the producer
+CMD ["python", "producer.py"]
+Subtask 2.2: Create a Python Consumer Application
+# Go back to main directory and create consumer
+cd ..
+mkdir consumer
+cd consumer
+
+# Create Python consumer script
+nano consumer.py
+Add the following Python code:
+
+#!/usr/bin/env python3
+
+import json
+import logging
+from kafka import KafkaConsumer
+from kafka.errors import KafkaError
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class DataConsumer:
+    def __init__(self, topics=['sensor-data'], bootstrap_servers=['kafka:29092']):
+        self.consumer = KafkaConsumer(
+            *topics,
+            bootstrap_servers=bootstrap_servers,
+            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            key_deserializer=lambda k: k.decode('utf-8') if k else None,
+            group_id='sensor-consumer-group',
+            auto_offset_reset='earliest',
+            enable_auto_commit=True
+        )
+        
+    def process_message(self, message):
+        """Process individual message"""
+        try:
+            data = message.value
+            key = message.key
+            
+            # Simple processing - log temperature alerts
+            if data.get('temperature', 0) > 30:
+                logger.warning(f"HIGH TEMPERATURE ALERT: {data}")
+            else:
+                logger.info(f"Normal reading from {key}: "
+                           f"Temp={data.get('temperature')}°C, "
+                           f"Humidity={data.get('humidity')}%")
+                           
+        except Exception as e:
+            logger.error(f"Error processing message: {e}")
+    
+    def consume_messages(self):
+        """Consume messages from Kafka topics"""
+        logger.info("Starting consumer...")
+        try:
+            for message in self.consumer:
+                self.process_message(message)
+                
+        except KeyboardInterrupt:
+            logger.info("Consumer interrupted by user")
+        except KafkaError as e:
+            logger.error(f"Kafka error: {e}")
+        finally:
+            self.consumer.close()
+
+if __name__ == "__main__":
+    consumer = DataConsumer()
+    consumer.consume_messages()
+Create a Dockerfile for the consumer:
+
+nano Dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install required packages
+RUN pip install kafka-python
+
+# Copy application code
+COPY consumer.py .
+
+# Run the consumer
+CMD ["python", "consumer.py"]
+Subtask 2.3: Update Docker Compose with Producer and Consumer
+# Go back to main directory
+cd ..
+
+# Update docker-compose.yml to include producer and consumer
+nano docker-compose.yml
+Add these services to your existing docker-compose.yml:
+
+  producer:
+    build: ./producer
+    container_name: kafka-producer
+    depends_on:
+      - kafka
+    networks:
+      - kafka-network
+    restart: unless-stopped
+
+  consumer:
+    build: ./consumer
+    container_name: kafka-consumer
+    depends_on:
+      - kafka
+    networks:
+      - kafka-network
+    restart: unless-stopped
+Subtask 2.4: Build and Run Producer and Consumer
+# Build and start all services including producer and consumer
+docker-compose up -d --build
+
+# Check if all containers are running
+docker-compose ps
+
+# View producer logs
+docker-compose logs -f producer
+
+# In another terminal, view consumer logs
+docker-compose logs -f consumer
+Task 3: Use kafkacat to Send and Receive Messages from Kafka Topics
+Subtask 3.1: Install and Configure kafkacat
+Install kafkacat (now called kcat) for testing Kafka functionality.
+
+# Install kafkacat on the host system
+sudo apt-get update
+sudo apt-get install -y kafkacat
+
+# Alternative: Use kafkacat in a Docker container
+docker run --rm -it --network kafka-docker-lab_kafka-network confluentinc/cp-kafkacat:latest kafkacat -b kafka:29092 -L
+Subtask 3.2: Create Topics Using kafkacat
+# Create additional topics for testing
+docker exec kafka-broker kafka-topics --create --topic user-events --bootstrap-server localhost:9092 --partitions 2 --replication-factor 1
+
+docker exec kafka-broker kafka-topics --create --topic system-logs --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
+
+# List all topics
+docker exec kafka-broker kafka-topics --bootstrap-server localhost:9092 --list
+Subtask 3.3: Send Messages Using kafkacat
+# Send messages to user-events topic
+echo '{"user_id": "user123", "action": "login", "timestamp": "2024-01-15T10:30:00Z"}' | \
+kafkacat -b localhost:9092 -t user-events -P
+
+echo '{"user_id": "user456", "action": "purchase", "amount": 99.99, "timestamp": "2024-01-15T10:31:00Z"}' | \
+kafkacat -b localhost:9092 -t user-events -P
+
+echo '{"user_id": "user789", "action": "logout", "timestamp": "2024-01-15T10:32:00Z"}' | \
+kafkacat -b localhost:9092 -t user-events -P
+
+# Send multiple messages from a file
+cat > sample_messages.txt << EOF
+{"level": "INFO", "service": "web-server", "message": "Server started successfully"}
+{"level": "ERROR", "service": "database", "message": "Connection timeout"}
+{"level": "WARN", "service": "cache", "message": "Memory usage high"}
+EOF
+
+# Send messages from file
+kafkacat -b localhost:9092 -t system-logs -P -l sample_messages.txt
+Subtask 3.4: Consume Messages Using kafkacat
+# Consume messages from user-events topic
+kafkacat -b localhost:9092 -t user-events -C -o beginning
+
+# Consume messages with key and offset information
+kafkacat -b localhost:9092 -t user-events -C -f 'Key: %k, Offset: %o, Message: %s\n'
+
+# Consume from specific partition
+kafkacat -b localhost:9092 -t user-events -C -p 0 -o beginning
+
+# Consume messages from system-logs topic
+kafkacat -b localhost:9092 -t system-logs -C -o beginning
+Subtask 3.5: Advanced kafkacat Operations
+# Get topic metadata
+kafkacat -b localhost:9092 -L
+
+# Get specific topic metadata
+kafkacat -b localhost:9092 -L -t user-events
+
+# Consume with consumer group
+kafkacat -b localhost:9092 -t user-events -C -G test-group
+
+# Produce with key
+echo "user123:{'action': 'click', 'page': 'homepage'}" | \
+kafkacat -b localhost:9092 -t user-events -P -K:
+Task 4: Monitor Kafka Cluster Health and Performance
+Subtask 4.1: Access Kafka UI Dashboard
+The Kafka UI provides a web-based interface for monitoring your Kafka cluster.
+
+# Ensure Kafka UI is running
+docker-compose ps kafka-ui
+
+# Access Kafka UI in your browser
+echo "Open your browser and navigate to: http://localhost:8080"
+Subtask 4.2: Monitor Using JMX Metrics
+Create a script to collect JMX metrics from Kafka.
+
+# Create monitoring directory
+mkdir monitoring
+cd monitoring
+
+# Create JMX monitoring script
+nano kafka_monitor.py
+#!/usr/bin/env python3
+
+import subprocess
+import json
+import time
+from datetime import datetime
+
+class KafkaMonitor:
+    def __init__(self, kafka_container='kafka-broker'):
+        self.kafka_container = kafka_container
+        
+    def get_topic_info(self):
+        """Get information about all topics"""
+        try:
+            cmd = f"docker exec {self.kafka_container} kafka-topics --bootstrap-server localhost:9092 --describe"
+            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            return result.stdout
+        except Exception as e:
+            print(f"Error getting topic info: {e}")
+            return None
+    
+    def get_consumer_groups(self):
+        """Get consumer group information"""
+        try:
+            cmd = f"docker exec {self.kafka_container} kafka-consumer-groups --bootstrap-server localhost:9092 --list"
+            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            return result.stdout.strip().split('\n')
+        except Exception as e:
+            print(f"Error getting consumer groups: {e}")
+            return []
+    
+    def get_consumer_group_details(self, group_id):
+        """Get detailed information about a consumer group"""
+        try:
+            cmd = f"docker exec {self.kafka_container} kafka-consumer-groups --bootstrap-server localhost:9092 --describe --group {group_id}"
+            result = subprocess.run(cmd.split(), capture_output=True, text=True)
+            return result.stdout
+        except Exception as e:
+            print(f"Error getting consumer group details: {e}")
+            return None
+    
+    def monitor_cluster(self):
+        """Monitor cluster health"""
+        print(f"=== Kafka Cluster Monitor - {datetime.now()} ===")
+        
+        # Topic information
+        print("\n--- Topic Information ---")
+        topic_info = self.get_topic_info()
+        if topic_info:
+            print(topic_info)
+        
+        # Consumer groups
+        print("\n--- Consumer Groups ---")
+        groups = self.get_consumer_groups()
+        for group in groups:
+            if group.strip():
+                print(f"\nGroup: {group}")
+                details = self.get_consumer_group_details(group)
+                if details:
+                    print(details)
+
+if __name__ == "__main__":
+    monitor = KafkaMonitor()
+    monitor.monitor_cluster()
+Subtask 4.3: Create Performance Monitoring Script
+# Create performance monitoring script
+nano performance_monitor.sh
+#!/bin/bash
+
+echo "=== Kafka Performance Monitor ==="
+echo "Timestamp: $(date)"
+echo
+
+# Container resource usage
+echo "--- Container Resource Usage ---"
+docker stats --no-stream kafka-broker zookeeper kafka-producer kafka-consumer
+
+echo
+echo "--- Kafka Broker Logs (Last 10 lines) ---"
+docker logs --tail 10 kafka-broker
+
+echo
+echo "--- Topic Partition Details ---"
+docker exec kafka-broker kafka-topics --bootstrap-server localhost:9092 --describe
+
+echo
+echo "--- Consumer Group Status ---"
+docker exec kafka-broker kafka-consumer-groups --bootstrap-server localhost:9092 --list
+
+# Check if consumer groups exist and show their status
+GROUPS=$(docker exec kafka-broker kafka-consumer-groups --bootstrap-server localhost:9092 --list 2>/dev/null)
+if [ ! -z "$GROUPS" ]; then
+    echo
+    echo "--- Consumer Group Details ---"
+    for group in $GROUPS; do
+        echo "Group: $group"
+        docker exec kafka-broker kafka-consumer-groups --bootstrap-server localhost:9092 --describe --group $group
+        echo
+    done
+fi
+Make the script executable and run it:
+
+chmod +x performance_monitor.sh
+./performance_monitor.sh
+Subtask 4.4: Set Up Log Monitoring
+# Create log monitoring script
+nano log_monitor.sh
+#!/bin/bash
+
+echo "=== Kafka Log Monitor ==="
+
+# Function to monitor logs
+monitor_logs() {
+    echo "Monitoring logs for $1..."
+    docker logs -f --tail 20 $1 &
+    PID=$!
+    sleep 10
+    kill $PID 2>/dev/null
+    echo
+}
+
+# Monitor each component
+monitor_logs "kafka-broker"
+monitor_logs "zookeeper"
+monitor_logs "kafka-producer"
+monitor_logs "kafka-consumer"
+
+echo "Log monitoring complete."
+chmod +x log_monitor.sh
+./log_monitor.sh
+Task 5: Implement a Simple Stream Processing Application within Docker
+Subtask 5.1: Create Stream Processing Application
+Create a stream processing application that processes data in real-time.
+
+# Create stream processor directory
+cd ..
+mkdir stream-processor
+cd stream-processor
+
+# Create stream processing application
+nano stream_processor.py
+#!/usr/bin/env python3
+
+import json
+import logging
+from kafka import KafkaConsumer, KafkaProducer
+from collections import defaultdict, deque
+from datetime import datetime, timedelta
+import threading
+import time
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class StreamProcessor:
+    def __init__(self):
+        # Consumer for input data
+        self.consumer = KafkaConsumer(
+            'sensor-data',
+            bootstrap_servers=['kafka:29092'],
+            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            key_deserializer=lambda k: k.decode('utf-8') if k else None,
+            group_id='stream-processor-group',
+            auto_offset_reset='latest'
+        )
+        
+        # Producer for processed data
+        self.producer = KafkaProducer(
+            bootstrap_servers=['kafka:29092'],
+            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+            key_serializer=lambda k: k.encode('utf-8') if k else None
+        )
+        
+        # In-memory storage for windowed aggregations
+        self.sensor_data = defaultdict(lambda: deque(maxlen=10))  # Keep last 10 readings per sensor
+        self.alerts_sent = set()
+        
+    def process_sensor_reading(self, key, data):
+        """Process individual sensor reading"""
+        try:
+            sensor_id = data.get('sensor_id')
+            temperature = data.get('temperature', 0)
+            humidity = data.get('humidity', 0)
+            timestamp = data.get('timestamp')
+            location = data.get('location')
+            
+            # Add to sliding window
+            self.sensor_data[sensor_id].append({
+                'temperature': temperature,
+                'humidity': humidity,
+                'timestamp': timestamp
+            })
+            
+            # Calculate moving average
+            readings = list(self.sensor_data[sensor_id])
+            avg_temp = sum(r['temperature'] for r in readings) / len(readings)
+            avg_humidity = sum(r['humidity'] for r in readings) / len(readings)
+            
+            # Create processed record
+            processed_data = {
+                'sensor_id': sensor_id,
+                'location': location,
+                'current_temperature': temperature,
+                'current_humidity': humidity,
+                'avg_temperature': round(avg_temp, 2),
+                'avg_humidity': round(avg_humidity, 2),
+                'reading_count': len(readings),
+                'processed_at': datetime.now().isoformat()
+            }
+            
+            # Send to processed data topic
+            self.producer.send('processed-sensor-data', key=sensor_id, value=processed_data)
+            
+            # Check for alerts
+            self.check_alerts(sensor_id, processed_data)
+            
+            logger.info(f"Processed data for {sensor_id}: Avg Temp={avg_temp:.2f}°C")
+            
+        except Exception as e:
+            logger.error(f"Error processing sensor reading: {e}")
+    
+    def check_alerts(self, sensor_id, data):
+        """Check for alert conditions"""
+        try:
+            alert_key = f"{sensor_id}_{datetime.now().strftime('%Y%m%d%H')}"  # One alert per sensor per hour
+            
+            # Temperature alert
+            if data['avg_temperature'] > 32 and alert_key not in self.alerts_sent:
+                alert = {
+                    'alert_type': 'HIGH_TEMPERATURE',
+                    'sensor_id': sensor_id,
+                    'location': data['location'],
+                    'current_value': data['current_temperature'],
+                    'average_value': data['avg_temperature'],
+                    'threshold': 32,
+                    'severity': 'HIGH',
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                self.producer.send('sensor-alerts', key=sensor_id, value=alert)
+                self.alerts_sent.add(alert_key)
+                logger.warning(f"HIGH TEMPERATURE ALERT: {alert}")
+            
+            # Humidity alert
+            if data['avg_humidity'] > 85 and f"humidity_{alert_key}" not in self.alerts_sent:
+                alert = {
+                    'alert_type': 'HIGH_HUMIDITY',
+                    'sensor_id': sensor_id,
+                    'location': data['location'],
+                    'current_value': data['current_humidity'],
+                    'average_value': data['avg_humidity'],
+                    'threshold': 85,
+                    'severity': 'MEDIUM',
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                self.producer.send('sensor-alerts', key=sensor_id, value=alert)
+                self.alerts_sent.add(f"humidity_{alert_key}")
+                logger.warning(f"HIGH HUMIDITY ALERT: {alert}")
+                
+        except Exception as e:
+            logger.error(f"Error checking alerts: {e}")
+    
+    def cleanup_old_alerts(self):
+        """Clean up old alert keys to prevent memory leaks"""
+        current_hour = datetime.now().strftime('%Y%m%d%H')
+        self.alerts_sent = {key for key in self.alerts_sent if current_hour in key}
+    
+    def start_processing(self):
+        """Start the stream processing"""
+        logger.info("Starting stream processor...")
+        
+        # Start cleanup thread
+        cleanup_thread = threading.Thread(target=self.periodic_cleanup)
+        cleanup_thread.daemon = True
+        cleanup_thread.start()
+        
+        try:
+            for message in self.consumer:
+                self.process_sensor_reading(message.key, message.value)
+                
+        except KeyboardInterrupt:
+            logger.info("Stream processor interrupted by user")
+        except Exception as e:
+            logger.error(f"Stream processing error: {e}")
+        finally:
+            self.consumer.close()
+            self.producer.close()
+    
+    def periodic_cleanup(self):
+        """Periodic cleanup of old data"""
+        while True:
+            time.sleep(3600)  # Run every hour
+            self.cleanup_old_alerts()
+            logger.info("Performed periodic cleanup")
+
+if __name__ == "__main__":
+    processor = StreamProcessor()
+    processor.start_processing()
+Subtask 5.2: Create Dockerfile for Stream Processor
+nano Dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install required packages
+RUN pip install kafka-python
+
+# Copy application code
+COPY stream_processor.py .
+
+# Run the stream processor
+CMD ["python", "stream_processor.py"]
+Subtask 5.3: Create Alert Consumer
+# Create alert consumer
+nano alert_consumer.py
+#!/usr/bin/env python3
+
+import json
+import logging
+from kafka import KafkaConsumer
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class AlertConsumer:
+    def __init__(self):
+        self.consumer = KafkaConsumer(
+            'sensor-alerts',
+            bootstrap_servers=['kafka:29092'],
+            value_deserializer=lambda m: json.loads(m.decode('utf-8')),
+            key_deserializer=lambda k: k.decode('utf-8') if k else None,
+            group_id='alert-consumer-group',
+            auto_offset_reset='earliest'
+        )
+    
+    def handle_alert(self, alert):
+        """Handle incoming alerts"""
+        alert_type = alert.get('alert_type')
+        sensor_id = alert.get('sensor_id')
+        location = alert.get('location')
+        severity = alert.get('severity')
+        current_value = alert.get('current_value')
+        threshold = alert.get('threshold')
+        
+        # Simulate alert handling actions
+        if severity == 'HIGH':
+            logger.error(f"🚨 CRITICAL ALERT: {alert_type} at {location}")
+            logger.error(f"   Sensor: {sensor_id}")
+            logger.error(f"   Current Value: {current_value}")
+            logger.error(f"   Threshold: {threshold}")
+            # In real scenario: send email, SMS, or trigger automated response
+            
+        elif severity == 'MEDIUM':
+            logger.warning(f"⚠️  WARNING: {alert_type} at {location}")
+            logger.warning(f"   Sensor: {sensor_id}")
+            logger.warning(f"   Current Value: {current_value}")
+            # In real scenario: log to monitoring system
+    
+    def start_consuming(self):
+        """Start consuming alerts"""
+        logger.info("Starting alert consumer...")
+        try:
+            for message in self.consumer:
+                self.handle_alert(message.value)
+        except KeyboardInterrupt:
+            logger.info("Alert consumer interrupted by user")
+        finally:
+            self.consumer.close()
+
+if __name__ == "__main__":
+    consumer = AlertConsumer()
+    consumer.start_consuming()
+Subtask 5.4: Update Docker Compose with Stream Processing
+# Go back to main directory
+cd ..
+
+# Update docker-compose.yml to include stream processor
+nano docker-compose.yml
+Add these services to your docker-compose.yml:
+
+  stream-processor:
+    build: ./stream-processor
+    container_name: kafka-stream-processor
+    depends_on:
+      - kafka
+    networks:
+      - kafka-network
+    restart: unless-stopped
+
+  alert-consumer:
+    build: ./stream-processor
+    container_name: kafka-alert-consumer
+    depends_on:
+      - kafka
+    networks:
+      - kafka-network
+    command: ["python", "alert_consumer.py"]
+    restart: unless-stopped
+Subtask 5.5: Create Required Topics and Start Stream Processing
+# Create topics for stream processing
+docker exec kafka-broker kafka-topics --create --topic processed-sensor-data --bootstrap-server localhost:9092 --partitions 2 --replication-factor 1
+
+docker exec kafka-broker kafka-topics --create --topic sensor-alerts --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1
+
+# Build and start stream processing services
+docker-compose up -d --build
+
+# Verify all services are running
+docker-compose ps
+
+# Monitor stream processor logs
+docker-compose logs -f stream-processor
+
+# In another terminal, monitor alert consumer logs
+docker-compose logs -f alert-consumer
+Subtask 5.6: Test Stream Processing Pipeline
+# Test the complete pipeline by consuming processed data
+kafkacat -b localhost:9092 -t processed-sensor-data -C -f 'Key: %k\nValue: %s\n\n'
+
+# Monitor alerts
+kafkacat -b localhost:9092 -t sensor-alerts -C -f 'ALERT - Key: %k\nValue: %s\n\n'
+
+# Check all topics
+docker exec kafka-broker kafka-topics --bootstrap-server localhost:9092 --list
+Troubleshooting Common Issues
+Issue 1: Containers Not Starting
+# Check container status
+docker-compose ps
+
+# View container logs
+docker-compose logs [service-name]
+
+# Restart specific service
+docker-compose restart [service-name]
+Issue 2: Connection Issues
+# Test network connectivity
+docker network ls
+docker network inspect kafka-docker-lab_kafka-network
+
+# Test Kafka connectivity
+docker exec kafka-broker kafka-broker-api-versions --bootstrap-server localhost:9092
+Issue 3: Topic Creation Issues
+# List existing topics
+docker exec kafka-broker kafka-topics --bootstrap-server localhost:9092 --list
+
+# Delete and recreate topic if needed
+docker exec kafka-broker kafka-topics --delete --topic [topic-name] --bootstrap-server localhost:9092
+Issue 4: Consumer Group Issues
