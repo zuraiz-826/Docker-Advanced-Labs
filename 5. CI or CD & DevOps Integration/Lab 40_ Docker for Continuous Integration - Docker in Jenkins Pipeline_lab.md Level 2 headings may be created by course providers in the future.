@@ -1,0 +1,894 @@
+Lab 40: Docker for Continuous Integration - Docker in Jenkins Pipeline
+Lab Objectives
+By the end of this lab, students will be able to:
+
+Install and configure Docker Plugin in Jenkins for CI/CD integration
+Set up Jenkins to pull Docker images and execute tests within containers
+Create Jenkins pipeline scripts with Docker build steps
+Configure automated Docker image builds and pushes to Docker Hub
+Monitor and manage containerized Jenkins builds effectively
+Understand the benefits of using Docker in continuous integration workflows
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Docker concepts (containers, images, Dockerfile)
+Familiarity with Jenkins fundamentals and pipeline concepts
+Basic knowledge of Git version control
+Understanding of CI/CD principles
+Experience with Linux command line operations
+A Docker Hub account (free registration at hub.docker.com)
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with Docker and Jenkins pre-installed. Simply click Start Lab to access your environment - no need to build your own VM or install software manually.
+
+Your lab environment includes:
+
+Ubuntu 20.04 LTS with Docker Engine installed
+Jenkins LTS version with basic plugins
+Git client and other essential development tools
+Network access to Docker Hub and GitHub
+Task 1: Install Docker Plugin in Jenkins
+Subtask 1.1: Access Jenkins Dashboard
+Open your web browser and navigate to Jenkins:
+
+http://localhost:8080
+Log in using the provided credentials:
+
+Username: admin
+Password: admin123
+You should see the Jenkins dashboard with the main menu on the left side.
+
+Subtask 1.2: Install Docker Plugin
+From the Jenkins dashboard, click on Manage Jenkins in the left sidebar.
+
+Click on Manage Plugins from the system configuration options.
+
+Click on the Available tab to see available plugins.
+
+In the search box, type Docker and press Enter.
+
+Look for the following plugins and check their boxes:
+
+Docker Plugin
+Docker Pipeline
+Docker Commons Plugin
+Click Install without restart at the bottom of the page.
+
+Wait for the installation to complete. You should see green checkmarks next to successfully installed plugins.
+
+Subtask 1.3: Configure Docker in Jenkins
+Navigate back to Manage Jenkins → Configure System.
+
+Scroll down to find the Docker section.
+
+Click Add Docker and configure:
+
+Name: docker-local
+Docker Host URI: unix:///var/run/docker.sock
+Check Enabled
+Click Test Connection to verify Docker connectivity.
+
+If successful, you'll see "Version = X.X.X, API Version = X.XX" message.
+
+Click Save to apply the configuration.
+
+Task 2: Configure Jenkins to Pull Docker Images and Run Tests
+Subtask 2.1: Create a Sample Application
+Open a terminal in your lab environment.
+
+Create a project directory:
+
+mkdir ~/jenkins-docker-demo
+cd ~/jenkins-docker-demo
+Create a simple Node.js application:
+
+cat > app.js << 'EOF'
+const express = require('express');
+const app = express();
+const port = 3000;
+
+app.get('/', (req, res) => {
+  res.json({ message: 'Hello from Docker CI/CD!', version: '1.0.0' });
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'healthy' });
+});
+
+app.listen(port, () => {
+  console.log(`App listening at http://localhost:${port}`);
+});
+
+module.exports = app;
+EOF
+Create a package.json file:
+
+cat > package.json << 'EOF'
+{
+  "name": "jenkins-docker-demo",
+  "version": "1.0.0",
+  "description": "Demo app for Jenkins Docker CI/CD",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "test": "jest"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "jest": "^29.5.0",
+    "supertest": "^6.3.3"
+  }
+}
+EOF
+Create a test file:
+
+mkdir tests
+cat > tests/app.test.js << 'EOF'
+const request = require('supertest');
+const app = require('../app');
+
+describe('App Tests', () => {
+  test('GET / should return welcome message', async () => {
+    const response = await request(app).get('/');
+    expect(response.status).toBe(200);
+    expect(response.body.message).toBe('Hello from Docker CI/CD!');
+  });
+
+  test('GET /health should return healthy status', async () => {
+    const response = await request(app).get('/health');
+    expect(response.status).toBe(200);
+    expect(response.body.status).toBe('healthy');
+  });
+});
+EOF
+Subtask 2.2: Create Dockerfile for Testing
+Create a Dockerfile for the application:
+
+cat > Dockerfile << 'EOF'
+FROM node:16-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+
+EXPOSE 3000
+
+CMD ["npm", "start"]
+EOF
+Create a Docker Compose file for testing:
+
+cat > docker-compose.test.yml << 'EOF'
+version: '3.8'
+services:
+  app-test:
+    build: .
+    command: npm test
+    volumes:
+      - .:/app
+      - /app/node_modules
+EOF
+Subtask 2.3: Initialize Git Repository
+Initialize a Git repository:
+
+git init
+git add .
+git commit -m "Initial commit with Node.js app and Docker configuration"
+Create a simple Git server for this demo:
+
+cd ~/
+git init --bare jenkins-docker-demo.git
+cd ~/jenkins-docker-demo
+git remote add origin ~/jenkins-docker-demo.git
+git push origin master
+Task 3: Add Docker Build Steps to Jenkins Pipeline
+Subtask 3.1: Create a New Jenkins Pipeline Job
+From Jenkins dashboard, click New Item.
+
+Enter item name: docker-ci-pipeline
+
+Select Pipeline and click OK.
+
+In the configuration page, scroll to the Pipeline section.
+
+Select Pipeline script from the Definition dropdown.
+
+Subtask 3.2: Create Pipeline Script with Docker Steps
+In the Pipeline script text area, enter the following Jenkinsfile:
+pipeline {
+    agent any
+    
+    environment {
+        DOCKER_IMAGE = 'jenkins-docker-demo'
+        DOCKER_TAG = "${BUILD_NUMBER}"
+        DOCKER_REGISTRY = 'your-dockerhub-username'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    // Clone the repository
+                    sh 'rm -rf jenkins-docker-demo || true'
+                    sh 'git clone ~/jenkins-docker-demo.git jenkins-docker-demo'
+                    dir('jenkins-docker-demo') {
+                        sh 'ls -la'
+                    }
+                }
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                dir('jenkins-docker-demo') {
+                    script {
+                        // Build Docker image
+                        def image = docker.build("${DOCKER_IMAGE}:${DOCKER_TAG}")
+                        
+                        // Also tag as latest
+                        sh "docker tag ${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_IMAGE}:latest"
+                        
+                        echo "Docker image built successfully: ${DOCKER_IMAGE}:${DOCKER_TAG}"
+                    }
+                }
+            }
+        }
+        
+        stage('Run Tests in Container') {
+            steps {
+                dir('jenkins-docker-demo') {
+                    script {
+                        // Run tests inside Docker container
+                        sh """
+                            docker run --rm \
+                                -v \$(pwd):/app \
+                                -w /app \
+                                node:16-alpine \
+                                sh -c 'npm install && npm test'
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Security Scan') {
+            steps {
+                dir('jenkins-docker-demo') {
+                    script {
+                        // Basic security scan using docker scout (if available)
+                        sh """
+                            echo "Running basic security checks..."
+                            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                                aquasec/trivy:latest image ${DOCKER_IMAGE}:${DOCKER_TAG} || true
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Integration Test') {
+            steps {
+                dir('jenkins-docker-demo') {
+                    script {
+                        // Start container and run integration tests
+                        sh """
+                            # Start the application container
+                            docker run -d --name test-app-${BUILD_NUMBER} \
+                                -p 3001:3000 ${DOCKER_IMAGE}:${DOCKER_TAG}
+                            
+                            # Wait for application to start
+                            sleep 10
+                            
+                            # Run integration tests
+                            curl -f http://localhost:3001/ || exit 1
+                            curl -f http://localhost:3001/health || exit 1
+                            
+                            echo "Integration tests passed!"
+                        """
+                    }
+                }
+            }
+            post {
+                always {
+                    // Clean up test container
+                    sh "docker stop test-app-${BUILD_NUMBER} || true"
+                    sh "docker rm test-app-${BUILD_NUMBER} || true"
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Clean up workspace
+            cleanWs()
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed. Check logs for details.'
+        }
+    }
+}
+Click Save to save the pipeline configuration.
+Subtask 3.3: Run the Pipeline
+Click Build Now to execute the pipeline.
+
+Monitor the build progress by clicking on the build number (e.g., #1) in the Build History.
+
+Click Console Output to see detailed logs of each stage.
+
+Verify that all stages complete successfully:
+
+Checkout
+Build Docker Image
+Run Tests in Container
+Security Scan
+Integration Test
+Task 4: Set Up Automated Docker Hub Push
+Subtask 4.1: Configure Docker Hub Credentials
+Go to Manage Jenkins → Manage Credentials.
+
+Click on (global) domain.
+
+Click Add Credentials.
+
+Configure the credentials:
+
+Kind: Username with password
+Username: Your Docker Hub username
+Password: Your Docker Hub password or access token
+ID: dockerhub-credentials
+Description: Docker Hub Login Credentials
+Click OK to save.
+
+Subtask 4.2: Update Pipeline with Docker Hub Push
+Go back to your docker-ci-pipeline job configuration.
+
+Update the pipeline script to include Docker Hub push functionality:
+
+pipeline {
+    agent any
+    
+    environment {
+        DOCKER_IMAGE = 'jenkins-docker-demo'
+        DOCKER_TAG = "${BUILD_NUMBER}"
+        DOCKER_REGISTRY = 'your-dockerhub-username'  // Replace with your Docker Hub username
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    sh 'rm -rf jenkins-docker-demo || true'
+                    sh 'git clone ~/jenkins-docker-demo.git jenkins-docker-demo'
+                    dir('jenkins-docker-demo') {
+                        sh 'ls -la'
+                    }
+                }
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                dir('jenkins-docker-demo') {
+                    script {
+                        def image = docker.build("${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}")
+                        sh "docker tag ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
+                        echo "Docker image built successfully: ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+                    }
+                }
+            }
+        }
+        
+        stage('Run Tests in Container') {
+            steps {
+                dir('jenkins-docker-demo') {
+                    script {
+                        sh """
+                            docker run --rm \
+                                -v \$(pwd):/app \
+                                -w /app \
+                                node:16-alpine \
+                                sh -c 'npm install && npm test'
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Security Scan') {
+            steps {
+                dir('jenkins-docker-demo') {
+                    script {
+                        sh """
+                            echo "Running basic security checks..."
+                            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                                aquasec/trivy:latest image ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG} || true
+                        """
+                    }
+                }
+            }
+        }
+        
+        stage('Integration Test') {
+            steps {
+                dir('jenkins-docker-demo') {
+                    script {
+                        sh """
+                            docker run -d --name test-app-${BUILD_NUMBER} \
+                                -p 3001:3000 ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                            
+                            sleep 10
+                            
+                            curl -f http://localhost:3001/ || exit 1
+                            curl -f http://localhost:3001/health || exit 1
+                            
+                            echo "Integration tests passed!"
+                        """
+                    }
+                }
+            }
+            post {
+                always {
+                    sh "docker stop test-app-${BUILD_NUMBER} || true"
+                    sh "docker rm test-app-${BUILD_NUMBER} || true"
+                }
+            }
+        }
+        
+        stage('Push to Docker Hub') {
+            when {
+                branch 'master'  // Only push on master branch
+            }
+            steps {
+                script {
+                    docker.withRegistry('https://registry-1.docker.io/v2/', 'dockerhub-credentials') {
+                        // Push both tagged and latest versions
+                        sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+                        sh "docker push ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
+                        
+                        echo "Successfully pushed to Docker Hub:"
+                        echo "- ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}"
+                        echo "- ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:latest"
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy to Staging') {
+            when {
+                branch 'master'
+            }
+            steps {
+                script {
+                    // Deploy to staging environment
+                    sh """
+                        echo "Deploying to staging environment..."
+                        
+                        # Stop existing staging container if running
+                        docker stop staging-app || true
+                        docker rm staging-app || true
+                        
+                        # Start new staging container
+                        docker run -d --name staging-app \
+                            -p 3002:3000 \
+                            --restart unless-stopped \
+                            ${DOCKER_REGISTRY}/${DOCKER_IMAGE}:${DOCKER_TAG}
+                        
+                        # Verify deployment
+                        sleep 5
+                        curl -f http://localhost:3002/health
+                        
+                        echo "Staging deployment successful!"
+                        echo "Application available at: http://localhost:3002"
+                    """
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Clean up local images to save space
+            sh """
+                docker image prune -f
+                docker system prune -f
+            """
+            cleanWs()
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+            echo 'Docker image pushed to Docker Hub and deployed to staging.'
+        }
+        failure {
+            echo 'Pipeline failed. Check logs for details.'
+            // Clean up any hanging containers
+            sh """
+                docker stop test-app-${BUILD_NUMBER} || true
+                docker rm test-app-${BUILD_NUMBER} || true
+                docker stop staging-app || true
+            """
+        }
+    }
+}
+Important: Replace your-dockerhub-username with your actual Docker Hub username.
+
+Click Save to update the pipeline.
+
+Subtask 4.3: Test the Complete Pipeline
+Click Build Now to run the updated pipeline.
+
+Monitor the execution and verify that all stages complete successfully.
+
+Check your Docker Hub repository to confirm the image was pushed successfully.
+
+Verify the staging deployment by accessing:
+
+http://localhost:3002
+Task 5: Monitor and Manage Jenkins Builds from Docker Containers
+Subtask 5.1: Set Up Build Monitoring Dashboard
+Install the Blue Ocean plugin for better pipeline visualization:
+
+Go to Manage Jenkins → Manage Plugins
+Search for "Blue Ocean"
+Install the plugin
+Access Blue Ocean interface:
+
+Click Open Blue Ocean from the Jenkins main menu
+View your pipeline with enhanced visualization
+Subtask 5.2: Create Docker-based Monitoring Script
+Create a monitoring script that runs in a container:
+cat > ~/monitor-builds.sh << 'EOF'
+#!/bin/bash
+
+# Docker-based Jenkins build monitor
+echo "=== Jenkins Build Monitor ==="
+echo "Monitoring Jenkins builds from Docker container..."
+
+# Function to check Jenkins API
+check_jenkins_status() {
+    local jenkins_url="http://host.docker.internal:8080"
+    local job_name="docker-ci-pipeline"
+    
+    echo "Checking Jenkins status..."
+    
+    # Get last build info
+    curl -s "${jenkins_url}/job/${job_name}/lastBuild/api/json" | \
+        python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    print(f'Last Build: #{data[\"number\"]}')
+    print(f'Status: {data[\"result\"] or \"RUNNING\"}')
+    print(f'Duration: {data[\"duration\"]/1000:.1f}s')
+    print(f'Timestamp: {data[\"timestamp\"]}')
+except:
+    print('Unable to fetch build information')
+"
+}
+
+# Function to monitor Docker containers
+monitor_containers() {
+    echo -e "\n=== Active Docker Containers ==="
+    docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+    
+    echo -e "\n=== Docker Images ==="
+    docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}"
+}
+
+# Function to check resource usage
+check_resources() {
+    echo -e "\n=== System Resources ==="
+    echo "Docker System Info:"
+    docker system df
+    
+    echo -e "\nContainer Resource Usage:"
+    docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}"
+}
+
+# Main monitoring loop
+while true; do
+    clear
+    echo "$(date): Jenkins Docker CI/CD Monitor"
+    echo "======================================"
+    
+    check_jenkins_status
+    monitor_containers
+    check_resources
+    
+    echo -e "\nPress Ctrl+C to exit. Refreshing in 30 seconds..."
+    sleep 30
+done
+EOF
+
+chmod +x ~/monitor-builds.sh
+Create a Docker container to run the monitoring script:
+cat > ~/Dockerfile.monitor << 'EOF'
+FROM alpine:latest
+
+RUN apk add --no-cache curl python3 docker-cli bash
+
+COPY monitor-builds.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/monitor-builds.sh
+
+CMD ["/usr/local/bin/monitor-builds.sh"]
+EOF
+Build and run the monitoring container:
+cd ~/
+docker build -f Dockerfile.monitor -t jenkins-monitor .
+
+# Run the monitoring container
+docker run -it --rm \
+    --name jenkins-monitor \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    --network host \
+    jenkins-monitor
+Subtask 5.3: Set Up Automated Build Triggers
+Configure webhook triggers for automatic builds:
+# Create a simple webhook listener script
+cat > ~/webhook-listener.py << 'EOF'
+#!/usr/bin/env python3
+
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+import subprocess
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class WebhookHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == '/webhook/build':
+            content_length = int(self.headers['Content-Length'])
+            post_data = self.rfile.read(content_length)
+            
+            try:
+                # Parse webhook data
+                webhook_data = json.loads(post_data.decode('utf-8'))
+                logger.info(f"Received webhook: {webhook_data}")
+                
+                # Trigger Jenkins build
+                result = subprocess.run([
+                    'curl', '-X', 'POST',
+                    'http://localhost:8080/job/docker-ci-pipeline/build',
+                    '--user', 'admin:admin123'
+                ], capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    response = {'status': 'success', 'message': 'Build triggered'}
+                    self.wfile.write(json.dumps(response).encode())
+                    logger.info("Build triggered successfully")
+                else:
+                    raise Exception(f"Failed to trigger build: {result.stderr}")
+                    
+            except Exception as e:
+                logger.error(f"Error processing webhook: {e}")
+                self.send_response(500)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                response = {'status': 'error', 'message': str(e)}
+                self.wfile.write(json.dumps(response).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+if __name__ == '__main__':
+    server = HTTPServer(('localhost', 8081), WebhookHandler)
+    logger.info("Webhook listener started on http://localhost:8081")
+    logger.info("Send POST requests to http://localhost:8081/webhook/build")
+    server.serve_forever()
+EOF
+
+chmod +x ~/webhook-listener.py
+Run the webhook listener in a Docker container:
+cat > ~/Dockerfile.webhook << 'EOF'
+FROM python:3.9-alpine
+
+RUN apk add --no-cache curl
+
+COPY webhook-listener.py /app/
+WORKDIR /app
+
+EXPOSE 8081
+
+CMD ["python3", "webhook-listener.py"]
+EOF
+
+# Build and run webhook container
+docker build -f Dockerfile.webhook -t webhook-listener .
+docker run -d --name webhook-listener \
+    -p 8081:8081 \
+    --network host \
+    webhook-listener
+Test the webhook:
+# Test the webhook trigger
+curl -X POST http://localhost:8081/webhook/build \
+    -H "Content-Type: application/json" \
+    -d '{"repository": "jenkins-docker-demo", "branch": "master"}'
+Subtask 5.4: Create Build Metrics Dashboard
+Create a simple metrics collection script:
+cat > ~/collect-metrics.sh << 'EOF'
+#!/bin/bash
+
+METRICS_FILE="/tmp/jenkins-metrics.json"
+JENKINS_URL="http://localhost:8080"
+JOB_NAME="docker-ci-pipeline"
+
+# Collect build metrics
+collect_metrics() {
+    echo "Collecting Jenkins build metrics..."
+    
+    # Get build history
+    curl -s "${JENKINS_URL}/job/${JOB_NAME}/api/json?tree=builds[number,result,duration,timestamp]" | \
+        python3 -c "
+import json, sys
+from datetime import datetime
+
+data = json.load(sys.stdin)
+builds = data['builds']
+
+metrics = {
+    'total_builds': len(builds),
+    'successful_builds': len([b for b in builds if b['result'] == 'SUCCESS']),
+    'failed_builds': len([b for b in builds if b['result'] == 'FAILURE']),
+    'average_duration': sum([b['duration'] for b in builds if b['duration']]) / len(builds) if builds else 0,
+    'last_build': builds[0] if builds else None,
+    'success_rate': len([b for b in builds if b['result'] == 'SUCCESS']) / len(builds) * 100 if builds else 0
+}
+
+print(json.dumps(metrics, indent=2))
+" > ${METRICS_FILE}
+
+    echo "Metrics saved to ${METRICS_FILE}"
+    cat ${METRICS_FILE}
+}
+
+# Display metrics dashboard
+display_dashboard() {
+    clear
+    echo "=== Jenkins Docker CI/CD Metrics Dashboard ==="
+    echo "=============================================="
+    
+    if [ -f ${METRICS_FILE} ]; then
+        python3 -c "
+import json
+with open('${METRICS_FILE}') as f:
+    metrics = json.load(f)
+
+print(f'Total Builds: {metrics[\"total_builds\"]}')
+print(f'Successful Builds: {metrics[\"successful_builds\"]}')
+print(f'Failed Builds: {metrics[\"failed_builds\"]}')
+print(f'Success Rate: {metrics[\"success_rate\"]:.1f}%')
+print(f'Average Duration: {metrics[\"average_duration\"]/1000:.1f}s')
+
+if metrics['last_build']:
+    print(f'Last Build: #{metrics[\"last_build\"][\"number\"]} - {metrics[\"last_build\"][\"result\"]}')
+"
+    else
+        echo "No metrics available yet. Run collect_metrics first."
+    fi
+    
+    echo -e "\n=== Docker Images Built ==="
+    docker images | grep jenkins-docker-demo || echo "No images found"
+    
+    echo -e "\n=== Active Containers ==="
+    docker ps --filter "name=staging-app" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+}
+
+# Main function
+case "$1" in
+    "collect")
+        collect_metrics
+        ;;
+    "dashboard")
+        display_dashboard
+        ;;
+    *)
+        echo "Usage: $0 {collect|dashboard}"
+        echo "  collect   - Collect build metrics from Jenkins"
+        echo "  dashboard - Display metrics dashboard"
+        ;;
+esac
+EOF
+
+chmod +x ~/collect-metrics.sh
+Run metrics collection:
+# Collect current metrics
+~/collect-metrics.sh collect
+
+# Display dashboard
+~/collect-metrics.sh dashboard
+Troubleshooting Common Issues
+Issue 1: Docker Permission Denied
+Problem: Jenkins cannot access Docker daemon
+
+Solution:
+
+# Add jenkins user to docker group
+sudo usermod -aG docker jenkins
+sudo systemctl restart jenkins
+
+# Or run Jenkins with Docker socket access
+sudo chmod 666 /var/run/docker.sock
+Issue 2: Pipeline Fails at Docker Build
+Problem: Docker build fails with "no space left on device"
+
+Solution:
+
+# Clean up Docker system
+docker system prune -a -f
+docker volume prune -f
+
+# Check disk space
+df -h
+Issue 3: Cannot Push to Docker Hub
+Problem: Authentication fails when pushing to Docker Hub
+
+Solution:
+
+Verify Docker Hub credentials in Jenkins
+Test manual login:
+docker login -u your-username
+Use Docker Hub access tokens instead of passwords
+Issue 4: Container Tests Fail
+Problem: Tests fail inside Docker containers
+
+Solution:
+
+# Debug by running container interactively
+docker run -it --rm -v $(pwd):/app -w /app node:16-alpine sh
+
+# Inside container, run commands manually
+npm install
+npm test
+Lab Conclusion
+Congratulations! You have successfully completed Lab 40: Docker for Continuous Integration - Docker in Jenkins Pipeline.
+
+What You Accomplished
+In this lab, you have:
+
+Integrated Docker with Jenkins: Successfully installed and configured Docker plugins in Jenkins, enabling containerized CI/CD workflows.
+
+Created Automated Testing Pipeline: Built a comprehensive Jenkins pipeline that pulls Docker images, runs tests in containers, and performs security scans.
+
+Implemented Docker Build Automation: Configured Jenkins to automatically build Docker images as part of the CI/CD process, ensuring consistent and reproducible builds.
+
+Set Up Docker Hub Integration: Established automated pushing of Docker images to Docker Hub, enabling easy distribution and deployment of your applications.
+
+Developed Monitoring Solutions: Created monitoring tools and dashboards to track build metrics, container status, and system resources from within Docker containers.
+
+Why This Matters
+The skills you've learned in this lab are crucial for modern DevOps practices because:
+
+Consistency: Docker containers ensure your applications run the same way in development, testing, and production environments
+Scalability: Containerized CI/CD pipelines can be easily scaled and distributed across multiple environments
+Efficiency: Docker's lightweight nature speeds up build and deployment processes
+Isolation: Each build runs in its own container, preventing conflicts and ensuring clean environments
+Portability: Docker images can be deployed anywhere Docker runs, from local machines to cloud platforms
+Next Steps
+To further enhance your Docker CI/CD skills, consider:
+
+Exploring multi-stage Docker builds for optimized production images
+Implementing Docker Compose for complex application stacks
+Learning about Kubernetes for container orchestration
+Studying Docker security best practices and vulnerability scanning
+Investigating advanced Jenkins pipeline features like parallel execution and matrix builds
+Certification Preparation
+This lab directly supports your preparation for the Docker Certified Associate (DCA) certification by covering:
+
+Docker integration with CI/CD tools
+Container lifecycle management
+Docker Hub registry operations
+Security and monitoring best practices
+Automated testing in containerized environments
+Keep practicing these concepts and exploring additional Docker features to strengthen your containerization expertise!
