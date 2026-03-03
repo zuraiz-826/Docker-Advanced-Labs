@@ -1,35 +1,59 @@
-Lab 105: Docker and Cloud - Deploying Docker Containers with AWS Fargate
-Lab Objectives
+Here's a beautifully formatted version of your lab document with improved structure, visual elements, and readability:
+
+---
+
+# Lab 105: Docker and Cloud - Deploying Docker Containers with AWS Fargate
+
+---
+
+## 📋 Lab Objectives
+
 By the end of this lab, you will be able to:
 
-Create and configure an Amazon ECS cluster using AWS Fargate
-Build Docker images and push them to Amazon Elastic Container Registry (ECR)
-Create and deploy task definitions for containerized applications on Fargate
-Configure Application Load Balancer for container services
-Monitor container performance and implement auto-scaling using CloudWatch
-Understand the fundamentals of serverless container deployment
-Prerequisites
+- **Create and configure** an Amazon ECS cluster using AWS Fargate
+- **Build Docker images** and push them to Amazon Elastic Container Registry (ECR)
+- **Create and deploy** task definitions for containerized applications on Fargate
+- **Configure** Application Load Balancer for container services
+- **Monitor** container performance and implement auto-scaling using CloudWatch
+- **Understand** the fundamentals of serverless container deployment
+
+---
+
+## 🎯 Prerequisites
+
 Before starting this lab, you should have:
 
-Basic understanding of Docker containers and containerization concepts
-Familiarity with AWS console navigation
-Basic knowledge of Linux command line operations
-Understanding of web applications and HTTP protocols
-AWS account with appropriate permissions for ECS, ECR, and related services
-Note: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machine.
+- ✓ Basic understanding of Docker containers and containerization concepts
+- ✓ Familiarity with AWS console navigation
+- ✓ Basic knowledge of Linux command line operations
+- ✓ Understanding of web applications and HTTP protocols
+- ✓ AWS account with appropriate permissions for ECS, ECR, and related services
 
-Lab Environment Setup
+> **💡 Note:** Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click **Start Lab** to access your environment - no need to build your own virtual machine.
+
+---
+
+## 🖥️ Lab Environment Setup
+
 Your Al Nafi cloud machine comes pre-installed with:
 
-Docker Engine
-AWS CLI v2
-Git
-Node.js and npm
-Text editors (nano, vim)
-Task 1: Create an ECS Cluster on AWS using AWS Fargate
-Subtask 1.1: Configure AWS CLI
+| Tool | Purpose |
+|------|---------|
+| **Docker Engine** | Container runtime |
+| **AWS CLI v2** | AWS command-line interface |
+| **Git** | Version control |
+| **Node.js & npm** | JavaScript runtime |
+| **nano/vim** | Text editors |
+
+---
+
+## 📝 Task 1: Create an ECS Cluster on AWS using AWS Fargate
+
+### Subtask 1.1: Configure AWS CLI
+
 First, configure your AWS CLI with the provided credentials.
 
+```bash
 # Configure AWS CLI
 aws configure
 
@@ -38,7 +62,13 @@ aws configure
 # AWS Secret Access Key: [provided by instructor]
 # Default region name: us-east-1
 # Default output format: json
-Subtask 1.2: Create ECS Cluster
+```
+
+### Subtask 1.2: Create ECS Cluster
+
+**Using AWS CLI:**
+
+```bash
 # Create a new ECS cluster
 aws ecs create-cluster \
     --cluster-name fargate-lab-cluster \
@@ -47,17 +77,25 @@ aws ecs create-cluster \
 
 # Verify cluster creation
 aws ecs describe-clusters --clusters fargate-lab-cluster
-Alternative: Using AWS Console
+```
 
-Navigate to Amazon ECS in the AWS Console
-Click Create Cluster
-Select Networking only (Powered by AWS Fargate)
-Enter cluster name: fargate-lab-cluster
-Click Create
-Task 2: Build and Push a Docker Image to AWS ECR
-Subtask 2.1: Create a Sample Application
+**Alternative: Using AWS Console**
+
+1. Navigate to **Amazon ECS** in the AWS Console
+2. Click **Create Cluster**
+3. Select **Networking only (Powered by AWS Fargate)**
+4. Enter cluster name: `fargate-lab-cluster`
+5. Click **Create**
+
+---
+
+## 🐳 Task 2: Build and Push a Docker Image to AWS ECR
+
+### Subtask 2.1: Create a Sample Application
+
 Create a simple Node.js web application for demonstration.
 
+```bash
 # Create project directory
 mkdir fargate-demo-app
 cd fargate-demo-app
@@ -118,7 +156,11 @@ USER node
 
 CMD ["npm", "start"]
 EOF
-Subtask 2.2: Create ECR Repository
+```
+
+### Subtask 2.2: Create ECR Repository
+
+```bash
 # Create ECR repository
 aws ecr create-repository \
     --repository-name fargate-demo-app \
@@ -126,7 +168,11 @@ aws ecr create-repository \
 
 # Get login token and authenticate Docker to ECR
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-1.amazonaws.com
-Subtask 2.3: Build and Push Docker Image
+```
+
+### Subtask 2.3: Build and Push Docker Image
+
+```bash
 # Get your AWS account ID
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 echo "Account ID: $ACCOUNT_ID"
@@ -142,8 +188,15 @@ docker push $ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/fargate-demo-app:latest
 
 # Verify image in ECR
 aws ecr describe-images --repository-name fargate-demo-app
-Task 3: Create a Task Definition for Fargate and Run the Container
-Subtask 3.1: Create IAM Role for ECS Tasks
+```
+
+---
+
+## ⚙️ Task 3: Create a Task Definition for Fargate and Run the Container
+
+### Subtask 3.1: Create IAM Role for ECS Tasks
+
+```bash
 # Create trust policy for ECS tasks
 cat > ecs-task-trust-policy.json << 'EOF'
 {
@@ -169,7 +222,11 @@ aws iam create-role \
 aws iam attach-role-policy \
     --role-name ecsTaskExecutionRole \
     --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-Subtask 3.2: Create Task Definition
+```
+
+### Subtask 3.2: Create Task Definition
+
+```bash
 # Get account ID and create task definition
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
@@ -210,7 +267,11 @@ aws logs create-log-group --log-group-name /ecs/fargate-demo-task
 
 # Register task definition
 aws ecs register-task-definition --cli-input-json file://task-definition.json
-Subtask 3.3: Create VPC and Security Groups
+```
+
+### Subtask 3.3: Create VPC and Security Groups
+
+```bash
 # Create VPC
 VPC_ID=$(aws ec2 create-vpc --cidr-block 10.0.0.0/16 --query 'Vpc.VpcId' --output text)
 echo "VPC ID: $VPC_ID"
@@ -258,7 +319,11 @@ aws ec2 authorize-security-group-ingress \
 echo "Subnet 1 ID: $SUBNET1_ID"
 echo "Subnet 2 ID: $SUBNET2_ID"
 echo "Security Group ID: $SG_ID"
-Subtask 3.4: Run the Container
+```
+
+### Subtask 3.4: Run the Container
+
+```bash
 # Run task on Fargate
 aws ecs run-task \
     --cluster fargate-lab-cluster \
@@ -272,8 +337,15 @@ aws ecs list-tasks --cluster fargate-lab-cluster
 # Get task details
 TASK_ARN=$(aws ecs list-tasks --cluster fargate-lab-cluster --query 'taskArns[0]' --output text)
 aws ecs describe-tasks --cluster fargate-lab-cluster --tasks $TASK_ARN
-Task 4: Set up Load Balancing for the Containerized Service using an Application Load Balancer
-Subtask 4.1: Create Application Load Balancer
+```
+
+---
+
+## ⚖️ Task 4: Set up Load Balancing using an Application Load Balancer
+
+### Subtask 4.1: Create Application Load Balancer
+
+```bash
 # Create ALB
 ALB_ARN=$(aws elbv2 create-load-balancer \
     --name fargate-demo-alb \
@@ -289,7 +361,11 @@ ALB_DNS=$(aws elbv2 describe-load-balancers \
     --query 'LoadBalancers[0].DNSName' --output text)
 
 echo "ALB DNS: $ALB_DNS"
-Subtask 4.2: Create Target Group
+```
+
+### Subtask 4.2: Create Target Group
+
+```bash
 # Create target group
 TG_ARN=$(aws elbv2 create-target-group \
     --name fargate-demo-tg \
@@ -305,14 +381,22 @@ TG_ARN=$(aws elbv2 create-target-group \
     --query 'TargetGroups[0].TargetGroupArn' --output text)
 
 echo "Target Group ARN: $TG_ARN"
-Subtask 4.3: Create Listener
+```
+
+### Subtask 4.3: Create Listener
+
+```bash
 # Create listener
 aws elbv2 create-listener \
     --load-balancer-arn $ALB_ARN \
     --protocol HTTP \
     --port 80 \
     --default-actions Type=forward,TargetGroupArn=$TG_ARN
-Subtask 4.4: Create ECS Service
+```
+
+### Subtask 4.4: Create ECS Service
+
+```bash
 # Create ECS service with load balancer
 aws ecs create-service \
     --cluster fargate-lab-cluster \
@@ -329,7 +413,11 @@ aws ecs wait services-stable --cluster fargate-lab-cluster --services fargate-de
 
 # Check service status
 aws ecs describe-services --cluster fargate-lab-cluster --services fargate-demo-service
-Subtask 4.5: Test Load Balancer
+```
+
+### Subtask 4.5: Test Load Balancer
+
+```bash
 # Test the application through load balancer
 echo "Testing application at: http://$ALB_DNS"
 curl -s http://$ALB_DNS | jq .
@@ -340,8 +428,15 @@ for i in {1..5}; do
   curl -s http://$ALB_DNS | jq .hostname
   sleep 1
 done
-Task 5: Monitor and Scale Services using CloudWatch
-Subtask 5.1: Create CloudWatch Dashboard
+```
+
+---
+
+## 📊 Task 5: Monitor and Scale Services using CloudWatch
+
+### Subtask 5.1: Create CloudWatch Dashboard
+
+```bash
 # Create CloudWatch dashboard
 cat > dashboard-body.json << EOF
 {
@@ -388,7 +483,11 @@ EOF
 aws cloudwatch put-dashboard \
     --dashboard-name "Fargate-Demo-Dashboard" \
     --dashboard-body file://dashboard-body.json
-Subtask 5.2: Set up Auto Scaling
+```
+
+### Subtask 5.2: Set up Auto Scaling
+
+```bash
 # Register scalable target
 aws application-autoscaling register-scalable-target \
     --service-namespace ecs \
@@ -415,7 +514,11 @@ POLICY_ARN=$(aws application-autoscaling put-scaling-policy \
     --query 'PolicyARN' --output text)
 
 echo "Scaling Policy ARN: $POLICY_ARN"
-Subtask 5.3: Create CloudWatch Alarms
+```
+
+### Subtask 5.3: Create CloudWatch Alarms
+
+```bash
 # Create CPU utilization alarm
 aws cloudwatch put-metric-alarm \
     --alarm-name "Fargate-Demo-High-CPU" \
@@ -441,7 +544,11 @@ aws cloudwatch put-metric-alarm \
     --comparison-operator GreaterThanThreshold \
     --evaluation-periods 2 \
     --dimensions Name=ServiceName,Value=fargate-demo-service Name=ClusterName,Value=fargate-lab-cluster
-Subtask 5.4: Generate Load for Testing
+```
+
+### Subtask 5.4: Generate Load for Testing
+
+```bash
 # Create a simple load testing script
 cat > load_test.sh << 'EOF'
 #!/bin/bash
@@ -472,7 +579,11 @@ LOAD_TEST_PID=$!
 echo "Load test running with PID: $LOAD_TEST_PID"
 echo "Monitor scaling in AWS Console or run: aws ecs describe-services --cluster fargate-lab-cluster --services fargate-demo-service"
 echo "To stop load test: kill $LOAD_TEST_PID"
-Subtask 5.5: Monitor Scaling Activity
+```
+
+### Subtask 5.5: Monitor Scaling Activity
+
+```bash
 # Monitor service scaling
 watch -n 30 'aws ecs describe-services --cluster fargate-lab-cluster --services fargate-demo-service --query "services[0].{DesiredCount:desiredCount,RunningCount:runningCount,PendingCount:pendingCount}"'
 
@@ -480,8 +591,15 @@ watch -n 30 'aws ecs describe-services --cluster fargate-lab-cluster --services 
 aws application-autoscaling describe-scaling-activities \
     --service-namespace ecs \
     --resource-id service/fargate-lab-cluster/fargate-demo-service
-Verification and Testing
-Test Application Functionality
+```
+
+---
+
+## ✅ Verification and Testing
+
+### Test Application Functionality
+
+```bash
 # Test application endpoints
 echo "Testing main endpoint:"
 curl -s http://$ALB_DNS | jq .
@@ -491,28 +609,36 @@ curl -s http://$ALB_DNS/health | jq .
 
 # Check service health
 aws elbv2 describe-target-health --target-group-arn $TG_ARN
-Verify Monitoring Setup
+```
+
+### Verify Monitoring Setup
+
+```bash
 # List CloudWatch alarms
 aws cloudwatch describe-alarms --alarm-names "Fargate-Demo-High-CPU" "Fargate-Demo-High-Memory"
 
 # Check dashboard
 echo "Dashboard URL: https://console.aws.amazon.com/cloudwatch/home?region=us-east-1#dashboards:name=Fargate-Demo-Dashboard"
-Troubleshooting Tips
-Common Issues and Solutions
-Issue: Task fails to start
+```
 
-Solution: Check CloudWatch logs for container errors
-aws logs describe-log-streams --log-group-name /ecs/fargate-demo-task
-Issue: Load balancer health checks failing
+---
 
-Solution: Verify security group allows traffic on port 3000 and health check endpoint is accessible
-Issue: Auto scaling not working
+## 🔧 Troubleshooting Tips
 
-Solution: Ensure CloudWatch metrics are being published and scaling policies are correctly configured
-Issue: Cannot access application
+### Common Issues and Solutions
 
-Solution: Check if subnets have internet gateway route and security groups allow inbound traffic
-Cleanup Commands
+| Issue | Solution |
+|-------|----------|
+| **Task fails to start** | Check CloudWatch logs for container errors: `aws logs describe-log-streams --log-group-name /ecs/fargate-demo-task` |
+| **Load balancer health checks failing** | Verify security group allows traffic on port 3000 and health check endpoint is accessible |
+| **Auto scaling not working** | Ensure CloudWatch metrics are being published and scaling policies are correctly configured |
+| **Cannot access application** | Check if subnets have internet gateway route and security groups allow inbound traffic |
+
+---
+
+## 🧹 Cleanup Commands
+
+```bash
 # Stop load test
 kill $LOAD_TEST_PID 2>/dev/null
 
@@ -548,29 +674,41 @@ aws ec2 delete-vpc --vpc-id $VPC_ID
 # Delete IAM role
 aws iam detach-role-policy --role-name ecsTaskExecutionRole --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 aws iam delete-role --role-name ecsTaskExecutionRole
-Conclusion
-Congratulations! You have successfully completed Lab 105: Docker and Cloud - Deploying Docker Containers with AWS Fargate.
+```
 
-What You Accomplished
-In this lab, you have:
+---
 
-Created an ECS Cluster: Set up a serverless container orchestration environment using AWS Fargate
-Built and Deployed Container Images: Created a containerized Node.js application and pushed it to Amazon ECR
-Configured Container Services: Created task definitions and deployed containers with proper networking and security
-Implemented Load Balancing: Set up an Application Load Balancer to distribute traffic across multiple container instances
-Established Monitoring and Auto-scaling: Configured CloudWatch monitoring, alarms, and automatic scaling policies
-Why This Matters
-Serverless Container Deployment: AWS Fargate eliminates the need to manage underlying infrastructure, allowing you to focus on your applications rather than server management.
+## 🎓 Conclusion
 
-Scalability and Reliability: The combination of ECS, Fargate, and Application Load Balancer provides automatic scaling and high availability for your containerized applications.
+**Congratulations!** You have successfully completed **Lab 105: Docker and Cloud - Deploying Docker Containers with AWS Fargate.**
 
-Production-Ready Architecture: The skills you've learned represent industry best practices for deploying containerized applications in the cloud, making your applications more resilient and cost-effective.
+### What You Accomplished
 
-Monitoring and Observability: CloudWatch integration provides essential insights into application performance and enables proactive scaling and alerting.
+| Task | Description |
+|------|-------------|
+| **Created an ECS Cluster** | Set up a serverless container orchestration environment using AWS Fargate |
+| **Built and Deployed Container Images** | Created a containerized Node.js application and pushed it to Amazon ECR |
+| **Configured Container Services** | Created task definitions and deployed containers with proper networking and security |
+| **Implemented Load Balancing** | Set up an Application Load Balancer to distribute traffic across multiple container instances |
+| **Established Monitoring and Auto-scaling** | Configured CloudWatch monitoring, alarms, and automatic scaling policies |
 
-Next Steps
-Explore advanced ECS features like service discovery and task placement strategies
-Implement CI/CD pipelines for automated container deployments
-Learn about container security best practices and AWS security services
-Investigate multi-region deployments and disaster recovery strategies
-This lab has provided you with fundamental skills for deploying and managing containerized applications in AWS, preparing you for the Docker Certified Associate (DCA) certification and real-world cloud container deployments.
+### Why This Matters
+
+- **🚀 Serverless Container Deployment:** AWS Fargate eliminates the need to manage underlying infrastructure, allowing you to focus on your applications rather than server management.
+
+- **⚡ Scalability and Reliability:** The combination of ECS, Fargate, and Application Load Balancer provides automatic scaling and high availability for your containerized applications.
+
+- **🏭 Production-Ready Architecture:** The skills you've learned represent industry best practices for deploying containerized applications in the cloud, making your applications more resilient and cost-effective.
+
+- **🔍 Monitoring and Observability:** CloudWatch integration provides essential insights into application performance and enables proactive scaling and alerting.
+
+### Next Steps
+
+- Explore advanced ECS features like service discovery and task placement strategies
+- Implement CI/CD pipelines for automated container deployments
+- Learn about container security best practices and AWS security services
+- Investigate multi-region deployments and disaster recovery strategies
+
+---
+
+> This lab has provided you with fundamental skills for deploying and managing containerized applications in AWS, preparing you for the **Docker Certified Associate (DCA) certification** and real-world cloud container deployments.
