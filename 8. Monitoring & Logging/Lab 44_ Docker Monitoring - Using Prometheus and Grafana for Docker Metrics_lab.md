@@ -1,43 +1,68 @@
-Lab 44: Docker Monitoring - Using Prometheus and Grafana for Docker Metrics
-Lab Objectives
+# 🐳 Lab 44: Docker Monitoring - Using Prometheus and Grafana for Docker Metrics 📊
+
+---
+
+## 🎯 Lab Objectives
+
 By the end of this lab, you will be able to:
 
-Set up and configure Prometheus to collect Docker container metrics
-Deploy and configure Grafana for data visualization
-Implement cAdvisor for comprehensive container performance monitoring
-Create custom dashboards in Grafana to display CPU, memory, and network usage metrics
-Configure alerting rules for container resource usage thresholds
-Understand the complete monitoring stack architecture for Docker environments
-Prerequisites
+* 🛠️ Set up and configure Prometheus to collect Docker container metrics.
+* 📈 Deploy and configure Grafana for data visualization.
+* 🔍 Implement cAdvisor for comprehensive container performance monitoring.
+* 📊 Create custom dashboards in Grafana to display CPU, memory, and network usage metrics.
+* 🚨 Configure alerting rules for container resource usage thresholds.
+* 🏗️ Understand the complete monitoring stack architecture for Docker environments.
+
+---
+
+## 🎒 Prerequisites
+
 Before starting this lab, you should have:
 
-Basic understanding of Docker containers and Docker Compose
-Familiarity with Linux command line operations
-Basic knowledge of YAML configuration files
-Understanding of basic networking concepts
-No prior experience with Prometheus or Grafana required
-Lab Environment Setup
-Ready-to-Use Cloud Machines: Al Nafi provides Linux-based cloud machines with Docker pre-installed. Simply click Start Lab to begin - no need to build your own VM or install Docker manually.
+* 🐳 Basic understanding of Docker containers and Docker Compose.
+* 💻 Familiarity with Linux command line operations.
+* 📄 Basic knowledge of YAML configuration files.
+* 🌐 Understanding of basic networking concepts.
+* ✨ *No prior experience with Prometheus or Grafana required!*
+
+---
+
+## 🏢 Lab Environment Setup
+
+* ☁️ **Ready-to-Use Cloud Machines:** Al Nafi provides Linux-based cloud machines with Docker pre-installed. Simply click **Start Lab** to begin — no need to build your own VM or install Docker manually.
 
 Your lab environment includes:
 
-Ubuntu 20.04 LTS with Docker Engine installed
-Docker Compose pre-configured
-All necessary ports available for the monitoring stack
-Internet connectivity for downloading container images
-Task 1: Set up Prometheus Container to Collect Metrics
-Subtask 1.1: Create Project Directory Structure
-First, let's create a organized directory structure for our monitoring stack:
+* 🐧 Ubuntu 20.04 LTS with Docker Engine installed.
+* 🐳 Docker Compose pre-configured.
+* 🔌 All necessary ports available for the monitoring stack.
+* 🌍 Internet connectivity for downloading container images.
 
+---
+
+## 🛠️ Task 1: Set up Prometheus Container to Collect Metrics
+
+### 📂 Subtask 1.1: Create Project Directory Structure
+
+First, let's create an organized directory structure for our monitoring stack:
+
+```bash
 # Create main project directory
 mkdir docker-monitoring-lab
 cd docker-monitoring-lab
 
 # Create subdirectories for configuration files
 mkdir prometheus grafana alertmanager
-Subtask 1.2: Configure Prometheus
+
+```
+
+---
+
+### ⚙️ Subtask 1.2: Configure Prometheus
+
 Create the Prometheus configuration file that defines what metrics to collect:
 
+```bash
 # Create Prometheus configuration file
 cat > prometheus/prometheus.yml << 'EOF'
 global:
@@ -66,9 +91,16 @@ scrape_configs:
     static_configs:
       - targets: ['node-exporter:9100']
 EOF
-Subtask 1.3: Create Alert Rules
+
+```
+
+---
+
+### 🚨 Subtask 1.3: Create Alert Rules
+
 Define alerting rules for container resource monitoring:
 
+```bash
 # Create alert rules file
 cat > prometheus/alert_rules.yml << 'EOF'
 groups:
@@ -101,10 +133,18 @@ groups:
           summary: "Container is down"
           description: "Container {{ $labels.instance }} has been down for more than 1 minute"
 EOF
-Task 2: Set up Grafana to Visualize Prometheus Data
-Subtask 2.1: Configure Grafana Data Sources
+
+```
+
+---
+
+## 📈 Task 2: Set up Grafana to Visualize Prometheus Data
+
+### 🔌 Subtask 2.1: Configure Grafana Data Sources
+
 Create Grafana provisioning configuration to automatically add Prometheus as a data source:
 
+```bash
 # Create Grafana provisioning directories
 mkdir -p grafana/provisioning/datasources
 mkdir -p grafana/provisioning/dashboards
@@ -121,9 +161,16 @@ datasources:
     isDefault: true
     editable: true
 EOF
-Subtask 2.2: Configure Dashboard Provisioning
+
+```
+
+---
+
+### 📋 Subtask 2.2: Configure Dashboard Provisioning
+
 Set up automatic dashboard loading:
 
+```bash
 # Create dashboard provisioning configuration
 cat > grafana/provisioning/dashboards/dashboard.yml << 'EOF'
 apiVersion: 1
@@ -139,10 +186,20 @@ providers:
     options:
       path: /etc/grafana/provisioning/dashboards
 EOF
-Task 3: Use cAdvisor Docker Image for Container Performance Monitoring
-Subtask 3.1: Create Docker Compose Configuration
+
+```
+
+---
+
+## 🔍 Task 3: Use cAdvisor Docker Image for Container Performance Monitoring
+
+### 🐳 Subtask 3.1: Create Docker Compose Configuration
+
 Create a comprehensive Docker Compose file that includes all monitoring components:
 
+> **⚠️ Seamless Practice Tip:** Ensure that no other services are running on ports `9090`, `3000`, `8080`, `9100`, `9093`, or `8081` to avoid `port already allocated` errors!
+
+```bash
 # Create Docker Compose file
 cat > docker-compose.yml << 'EOF'
 version: '3.8'
@@ -242,9 +299,16 @@ networks:
   monitoring:
     driver: bridge
 EOF
-Subtask 3.2: Configure Alertmanager
+
+```
+
+---
+
+### 🚨 Subtask 3.2: Configure Alertmanager
+
 Create Alertmanager configuration for handling alerts:
 
+```bash
 # Create Alertmanager configuration
 cat > alertmanager/alertmanager.yml << 'EOF'
 global:
@@ -271,9 +335,16 @@ inhibit_rules:
       severity: 'warning'
     equal: ['alertname', 'dev', 'instance']
 EOF
-Subtask 3.3: Deploy the Monitoring Stack
+
+```
+
+---
+
+### 🚀 Subtask 3.3: Deploy the Monitoring Stack
+
 Start all monitoring services:
 
+```bash
 # Deploy the complete monitoring stack
 docker-compose up -d
 
@@ -284,15 +355,29 @@ docker-compose ps
 docker-compose logs prometheus
 docker-compose logs grafana
 docker-compose logs cadvisor
-Task 4: Create Dashboards in Grafana to Display Metrics
-Subtask 4.1: Access Grafana Web Interface
-Open your web browser and navigate to http://localhost:3000
-Login with credentials:
-Username: admin
-Password: admin123
-Subtask 4.2: Create Container Overview Dashboard
+
+```
+
+---
+
+## 📊 Task 4: Create Dashboards in Grafana to Display Metrics
+
+### 🌐 Subtask 4.1: Access Grafana Web Interface
+
+1. Open your web browser and navigate to `http://localhost:3000`.
+2. Login with credentials:
+* **Username:** `admin`
+* **Password:** `admin123`
+
+
+
+---
+
+### 📄 Subtask 4.2: Create Container Overview Dashboard
+
 Create a comprehensive dashboard JSON configuration:
 
+```bash
 # Create dashboard configuration
 cat > grafana/provisioning/dashboards/docker-monitoring.json << 'EOF'
 {
@@ -383,61 +468,93 @@ cat > grafana/provisioning/dashboards/docker-monitoring.json << 'EOF'
   }
 }
 EOF
-Subtask 4.3: Create Custom Dashboard Manually
+
+```
+
+---
+
+### 🖱️ Subtask 4.3: Create Custom Dashboard Manually
+
 Follow these steps to create additional dashboards through the Grafana UI:
 
-Navigate to Dashboard Creation:
+1. **Navigate to Dashboard Creation:**
+* Click the `+` icon in the left sidebar.
+* Select **Dashboard**.
+* Click **Add new panel**.
 
-Click the "+" icon in the left sidebar
-Select "Dashboard"
-Click "Add new panel"
-Configure CPU Usage Panel:
 
-In the Query tab, enter: rate(container_cpu_usage_seconds_total{name!=""}[5m]) * 100
-Set Legend format to: {{name}}
-In the Panel tab, set Title to: "Container CPU Usage (%)"
-Set Y-axis max to 100
-Configure Memory Usage Panel:
+2. **Configure CPU Usage Panel:**
+* In the **Query** tab, enter: `rate(container_cpu_usage_seconds_total{name!=""}[5m]) * 100`
+* Set Legend format to: `{{name}}`
+* In the **Panel** tab, set Title to: `"Container CPU Usage (%)"`
+* Set Y-axis max to `100`.
 
-Add another panel
-Query: container_memory_usage_bytes{name!=""} / 1024 / 1024
-Legend: {{name}}
-Title: "Container Memory Usage (MB)"
-Configure Network Traffic Panel:
 
-Add another panel
-Query 1: rate(container_network_receive_bytes_total{name!=""}[5m])
-Query 2: rate(container_network_transmit_bytes_total{name!=""}[5m])
-Title: "Network I/O (Bytes/sec)"
-Task 5: Set up Alerting for Container Resource Usage Thresholds
-Subtask 5.1: Verify Alert Rules
+3. **Configure Memory Usage Panel:**
+* Add another panel.
+* Query: `container_memory_usage_bytes{name!=""} / 1024 / 1024`
+* Legend: `{{name}}`
+* Title: `"Container Memory Usage (MB)"`
+
+
+4. **Configure Network Traffic Panel:**
+* Add another panel.
+* Query 1: `rate(container_network_receive_bytes_total{name!=""}[5m])`
+* Query 2: `rate(container_network_transmit_bytes_total{name!=""}[5m])`
+* Title: `"Network I/O (Bytes/sec)"`
+
+
+
+---
+
+## 🚨 Task 5: Set up Alerting for Container Resource Usage Thresholds
+
+### 🔍 Subtask 5.1: Verify Alert Rules
+
 Check that Prometheus has loaded the alert rules:
 
+```bash
 # Check Prometheus targets
 curl http://localhost:9090/api/v1/targets
 
 # Check alert rules
 curl http://localhost:9090/api/v1/rules
-Subtask 5.2: Configure Grafana Alerting
-Access Grafana Alerting:
 
-Navigate to Alerting → Alert Rules in Grafana
-Click "New rule"
-Create High CPU Alert:
+```
 
-Query: rate(container_cpu_usage_seconds_total{name!=""}[5m]) * 100
-Condition: IS ABOVE 80
-Evaluation: Every 1m for 2m
-Add labels: severity: warning
-Create Memory Alert:
+---
 
-Query: (container_memory_usage_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""}) * 100
-Condition: IS ABOVE 90
-Evaluation: Every 1m for 2m
-Add labels: severity: critical
-Subtask 5.3: Test Alerting System
+### ⚙️ Subtask 5.2: Configure Grafana Alerting
+
+1. **Access Grafana Alerting:**
+* Navigate to **Alerting → Alert Rules** in Grafana.
+* Click **New rule**.
+
+
+2. **Create High CPU Alert:**
+* Query: `rate(container_cpu_usage_seconds_total{name!=""}[5m]) * 100`
+* Condition: `IS ABOVE 80`
+* Evaluation: Every `1m` for `2m`
+* Add labels: `severity: warning`
+
+
+3. **Create Memory Alert:**
+* Query: `(container_memory_usage_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""}) * 100`
+* Condition: `IS ABOVE 90`
+* Evaluation: Every `1m` for `2m`
+* Add labels: `severity: critical`
+
+
+
+---
+
+### 🧪 Subtask 5.3: Test Alerting System
+
 Create a test container that consumes resources to trigger alerts:
 
+> **⚠️ Common Error Note:** If you encounter `OCI runtime create failed` or image pull errors, make sure you have active internet connectivity in your lab environment.
+
+```bash
 # Create a CPU stress test container
 docker run -d --name cpu-stress --cpus="0.5" progrium/stress --cpu 2 --timeout 300s
 
@@ -446,9 +563,16 @@ docker run -d --name memory-stress --memory="100m" progrium/stress --vm 1 --vm-b
 
 # Monitor the alerts in Prometheus
 # Navigate to http://localhost:9090/alerts
-Subtask 5.4: Verify Monitoring Data
+
+```
+
+---
+
+### 🔎 Subtask 5.4: Verify Monitoring Data
+
 Check that all components are collecting data properly:
 
+```bash
 # Check Prometheus metrics
 curl "http://localhost:9090/api/v1/query?query=up"
 
@@ -457,54 +581,84 @@ curl "http://localhost:8080/metrics" | grep container_cpu
 
 # Verify Grafana data source
 curl -u admin:admin123 "http://localhost:3000/api/datasources"
-Verification and Testing
-Test the Complete Monitoring Stack
-Verify Service Accessibility:
 
-Prometheus: http://localhost:9090
-Grafana: http://localhost:3000
-cAdvisor: http://localhost:8080
-Alertmanager: http://localhost:9093
-Check Data Collection:
+```
 
+---
+
+## ✅ Verification and Testing
+
+### 🧪 Test the Complete Monitoring Stack
+
+1. **Verify Service Accessibility:**
+* Prometheus: `http://localhost:9090`
+* Grafana: `http://localhost:3000`
+* cAdvisor: `http://localhost:8080`
+* Alertmanager: `http://localhost:9093`
+
+
+2. **Check Data Collection:**
+```bash
 # Verify container metrics are being collected
 curl "http://localhost:9090/api/v1/query?query=container_cpu_usage_seconds_total"
 
 # Check if targets are healthy
 curl "http://localhost:9090/api/v1/targets" | grep -i health
-Test Dashboard Functionality:
 
-Login to Grafana
-Navigate to the Docker Monitoring dashboard
-Verify that CPU, memory, and network metrics are displaying
-Check that data updates every 5 seconds
-Validate Alerting:
+```
 
-Check Prometheus alerts page for any active alerts
-Verify Alertmanager is receiving alerts
-Test alert resolution when stress containers are stopped
-Troubleshooting Common Issues
-Issue 1: cAdvisor Not Collecting Metrics
-Solution:
 
+3. **Test Dashboard Functionality:**
+* Login to Grafana.
+* Navigate to the **Docker Monitoring** dashboard.
+* Verify that CPU, memory, and network metrics are displaying.
+* Check that data updates every 5 seconds.
+
+
+4. **Validate Alerting:**
+* Check Prometheus alerts page for any active alerts.
+* Verify Alertmanager is receiving alerts.
+* Test alert resolution when stress containers are stopped.
+
+
+
+---
+
+## 🔧 Troubleshooting Common Issues
+
+### ❌ Issue 1: cAdvisor Not Collecting Metrics
+
+**Solution:**
+
+```bash
 # Ensure cAdvisor has proper permissions
 docker-compose down
 docker-compose up -d cadvisor
 
 # Check cAdvisor logs
 docker-compose logs cadvisor
-Issue 2: Grafana Cannot Connect to Prometheus
-Solution:
 
+```
+
+### ❌ Issue 2: Grafana Cannot Connect to Prometheus
+
+**Solution:**
+
+```bash
 # Verify network connectivity
 docker network ls
 docker network inspect docker-monitoring-lab_monitoring
 
 # Test connection from Grafana container
 docker exec grafana curl http://prometheus:9090/api/v1/targets
-Issue 3: No Data in Dashboards
-Solution:
 
+```
+
+### ❌ Issue 3: No Data in Dashboards
+
+**Solution:**
+
+```bash
 # Check Prometheus configuration
 docker exec prometheus cat /etc/prometheus/prometheus.yml
 
@@ -513,9 +667,16 @@ curl http://localhost:9090/api/v1/targets
 
 # Restart Prometheus if needed
 docker-compose restart prometheus
-Lab Cleanup
+
+```
+
+---
+
+## 🧹 Lab Cleanup
+
 When you're finished with the lab, clean up the resources:
 
+```bash
 # Stop and remove all containers
 docker-compose down
 
@@ -528,28 +689,35 @@ docker rm -f cpu-stress memory-stress
 # Clean up project directory (optional)
 cd ..
 rm -rf docker-monitoring-lab
-Conclusion
+
+```
+
+---
+
+## 🎉 Conclusion
+
 Congratulations! You have successfully completed the Docker Monitoring lab using Prometheus and Grafana. Here's what you accomplished:
 
-Key Achievements:
+### 🏆 Key Achievements:
 
-Monitoring Infrastructure: Set up a complete monitoring stack with Prometheus, Grafana, cAdvisor, and Alertmanager
-Metrics Collection: Configured automated collection of container CPU, memory, and network metrics
-Data Visualization: Created comprehensive dashboards to visualize container performance in real-time
-Alerting System: Implemented proactive alerting for resource usage thresholds
-Best Practices: Learned industry-standard monitoring practices for containerized environments
-Why This Matters:
+* 🏗️ **Monitoring Infrastructure:** Set up a complete monitoring stack with Prometheus, Grafana, cAdvisor, and Alertmanager.
+* 📊 **Metrics Collection:** Configured automated collection of container CPU, memory, and network metrics.
+* 📈 **Data Visualization:** Created comprehensive dashboards to visualize container performance in real-time.
+* 🚨 **Alerting System:** Implemented proactive alerting for resource usage thresholds.
+* 🌟 **Best Practices:** Learned industry-standard monitoring practices for containerized environments.
 
-Production Readiness: These monitoring skills are essential for managing Docker containers in production environments
-Proactive Management: Early detection of resource issues prevents application downtime and performance degradation
-Scalability: Understanding container metrics helps in making informed scaling decisions
-Troubleshooting: Comprehensive monitoring data accelerates problem identification and resolution
-Career Development: Monitoring expertise is highly valued in DevOps and Site Reliability Engineering roles
-Next Steps:
+### 💡 Why This Matters:
 
-Explore advanced Prometheus queries and functions
-Learn about custom metrics and application-specific monitoring
-Investigate monitoring in Kubernetes environments
-Study advanced alerting strategies and notification channels
-Practice with monitoring at scale across multiple hosts
-This lab provides a solid foundation for container monitoring that you can apply to real-world Docker deployments, making you better prepared for the Docker Certified Associate (DCA) certification and professional container management responsibilities.
+* 🚀 **Production Readiness:** These monitoring skills are essential for managing Docker containers in production environments.
+* 🛡️ **Proactive Management:** Early detection of resource issues prevents application downtime and performance degradation.
+* 📈 **Scalability:** Understanding container metrics helps in making informed scaling decisions.
+* 🔍 **Troubleshooting:** Comprehensive monitoring data accelerates problem identification and resolution.
+* 🎓 **Career Development:** Monitoring expertise is highly valued in DevOps and Site Reliability Engineering roles.
+
+### 🚀 Next Steps:
+
+* 🔬 Explore advanced Prometheus queries and functions.
+* 🛠️ Learn about custom metrics and application-specific monitoring.
+* ☸️ Investigate monitoring in Kubernetes environments.
+* 📢 Study advanced alerting strategies and notification channels.
+* 🌐 Practice with monitoring at scale across multiple hosts.
